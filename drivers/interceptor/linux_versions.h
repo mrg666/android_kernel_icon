@@ -28,10 +28,10 @@
 #endif /* KERNEL_VERSION */
 
 /* 3.0.43 is the highest version currently supported */
-#if LINUX_VERSION_CODE > KERNEL_VERSION(3,0,43) && \
+#if LINUX_VERSION_CODE > KERNEL_VERSION(3,0,103) && \
   LINUX_VERSION_CODE < KERNEL_VERSION(3,1,0)
-#error "Kernel versions after 3.0.43 are not supported"
-#endif /* LINUX_VERSION_CODE > KERNEL_VERSION(3,0,43) */
+#error "Kernel versions after 3.0.103 are not supported"
+#endif /* LINUX_VERSION_CODE > KERNEL_VERSION(3,0,103) */
 
 /* 3.1.10 is the highest 3.1 version currently supported */
 #if LINUX_VERSION_CODE > KERNEL_VERSION(3,1,10) && \
