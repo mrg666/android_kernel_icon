@@ -8,7 +8,7 @@
 #include <linux/init.h>
 #include <linux/slab.h>
 #include <linux/writeback.h>
-#include <linux/module.h>
+#include <linux/export.h>
 #include <linux/backing-dev.h>
 #include <linux/wait.h>
 #include <linux/rwsem.h>
@@ -176,8 +176,7 @@ int inode_init_always(struct super_block *sb, struct inode *inode)
 	mutex_init(&inode->i_mutex);
 	lockdep_set_class(&inode->i_mutex, &sb->s_type->i_mutex_key);
 
-	init_rwsem(&inode->i_alloc_sem);
-	lockdep_set_class(&inode->i_alloc_sem, &sb->s_type->i_alloc_sem_key);
+	atomic_set(&inode->i_dio_count, 0);
 
 	mapping->a_ops = &empty_aops;
 	mapping->host = inode;
@@ -369,11 +368,9 @@ EXPORT_SYMBOL_GPL(inode_sb_list_add);
 
 static inline void inode_sb_list_del(struct inode *inode)
 {
-	if (!list_empty(&inode->i_sb_list)) {
-		spin_lock(&inode_sb_list_lock);
-		list_del_init(&inode->i_sb_list);
-		spin_unlock(&inode_sb_list_lock);
-	}
+	spin_lock(&inode_sb_list_lock);
+	list_del_init(&inode->i_sb_list);
+	spin_unlock(&inode_sb_list_lock);
 }
 
 static unsigned long hash(struct super_block *sb, unsigned long hashval)
@@ -845,29 +842,6 @@ unsigned int get_next_ino(void)
 EXPORT_SYMBOL(get_next_ino);
 
 /**
- *	new_inode_pseudo 	- obtain an inode
- *	@sb: superblock
- *
- *	Allocates a new inode for given superblock.
- *	Inode wont be chained in superblock s_inodes list
- *	This means :
- *	- fs can't be unmount
- *	- quotas, fsnotify, writeback can't work
- */
-struct inode *new_inode_pseudo(struct super_block *sb)
-{
-	struct inode *inode = alloc_inode(sb);
-
-	if (inode) {
-		spin_lock(&inode->i_lock);
-		inode->i_state = 0;
-		spin_unlock(&inode->i_lock);
-		INIT_LIST_HEAD(&inode->i_sb_list);
-	}
-	return inode;
-}
-
-/**
  *	new_inode 	- obtain an inode
  *	@sb: superblock
  *
@@ -885,9 +859,13 @@ struct inode *new_inode(struct super_block *sb)
 
 	spin_lock_prefetch(&inode_sb_list_lock);
 
-	inode = new_inode_pseudo(sb);
-	if (inode)
+	inode = alloc_inode(sb);
+	if (inode) {
+		spin_lock(&inode->i_lock);
+		inode->i_state = 0;
+		spin_unlock(&inode->i_lock);
 		inode_sb_list_add(inode);
+	}
 	return inode;
 }
 EXPORT_SYMBOL(new_inode);

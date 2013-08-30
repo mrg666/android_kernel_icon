@@ -518,7 +518,7 @@ static inline void __free_one_page(struct page *page,
 	unsigned long page_idx;
 	unsigned long combined_idx;
 	unsigned long uninitialized_var(buddy_idx);
-	struct page *buddy = NULL;
+	struct page *buddy;
 
 	if (unlikely(PageCompound(page)))
 		if (unlikely(destroy_compound_page(page, order)))
@@ -854,6 +854,11 @@ static int fallbacks[MIGRATE_TYPES][MIGRATE_TYPES-1] = {
 	[MIGRATE_MOVABLE]     = { MIGRATE_RECLAIMABLE, MIGRATE_UNMOVABLE, MIGRATE_RESERVE },
 	[MIGRATE_RESERVE]     = { MIGRATE_RESERVE,     MIGRATE_RESERVE,   MIGRATE_RESERVE }, /* Never used */
 };
+
+int *get_migratetype_fallbacks(int mtype)
+{
+	return fallbacks[mtype];
+}
 
 /*
  * Move the free pages in a range to the free lists of the requested type.
@@ -1708,6 +1713,7 @@ zonelist_scan:
 				continue;
 
 		BUILD_BUG_ON(ALLOC_NO_WATERMARKS < NR_WMARK);
+		BUG_ON((alloc_flags & ALLOC_WMARK_MASK) == (ALLOC_WMARK_LOW | ALLOC_WMARK_HIGH));
 		if (!(alloc_flags & ALLOC_NO_WATERMARKS)) {
 			unsigned long mark;
 			int ret;
@@ -5838,6 +5844,7 @@ static struct trace_print_flags pageflag_names[] = {
 #ifdef CONFIG_MEMORY_FAILURE
 	{1UL << PG_hwpoison,		"hwpoison"	},
 #endif
+	{1UL << PG_readahead,           "PG_readahead"  },
 	{-1UL,				NULL		},
 };
 

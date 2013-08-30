@@ -1191,10 +1191,6 @@ static int __check_block_validity(struct inode *inode, const char *func,
 {
 	if (!ext4_data_block_valid(EXT4_SB(inode->i_sb), map->m_pblk,
 				   map->m_len)) {
-		printk(KERN_ERR "printing inode..\n");
-		print_block_data(inode->i_sb, 0, (unsigned char *)inode,
-				0, EXT4_INODE_SIZE(inode->i_sb));
-
 		ext4_error_inode(inode, func, line, map->m_pblk,
 				 "lblock %lu mapped to illegal pblock "
 				 "(length %d)", (unsigned long) map->m_lblk,
@@ -2950,6 +2946,10 @@ static int ext4_da_writepages(struct address_space *mapping,
 	 * the stack trace.
 	 */
 	if (unlikely(sbi->s_mount_flags & EXT4_MF_FS_ABORTED))
+		return -EROFS;
+
+	/* return immediately if filesystem is mounted read-only */
+	if (unlikely(inode->i_sb->s_flags & MS_RDONLY))
 		return -EROFS;
 
 	if (wbc->range_start == 0 && wbc->range_end == LLONG_MAX)
@@ -5098,15 +5098,6 @@ struct inode *ext4_iget(struct super_block *sb, unsigned long ino)
 	return inode;
 
 bad_inode:
-	printk(KERN_ERR "iloc info, offset : %lu,",
-			iloc.offset);
-	printk(KERN_ERR " group# : %u\n", iloc.block_group);
-	printk(KERN_ERR "sb info, inodes per group : %lu,",
-			EXT4_SB(sb)->s_inodes_per_group);
-	printk(KERN_ERR " inode size : %d\n",
-			EXT4_SB(sb)->s_inode_size);
-	print_bh(sb, iloc.bh, 0, EXT4_BLOCK_SIZE(sb));
-
 	brelse(iloc.bh);
 	iget_failed(inode);
 	return ERR_PTR(ret);
@@ -5906,80 +5897,84 @@ int ext4_page_mkwrite(struct vm_area_struct *vma, struct vm_fault *vmf)
 	struct page *page = vmf->page;
 	loff_t size;
 	unsigned long len;
-	int ret = -EINVAL;
-	void *fsdata;
+	int ret;
 	struct file *file = vma->vm_file;
 	struct inode *inode = file->f_path.dentry->d_inode;
 	struct address_space *mapping = inode->i_mapping;
+	handle_t *handle;
+	get_block_t *get_block;
+	int retries = 0;
 
 	/*
-	 * Get i_alloc_sem to stop truncates messing with the inode. We cannot
-	 * get i_mutex because we are already holding mmap_sem.
+	 * This check is racy but catches the common case. We rely on
+	 * __block_page_mkwrite() to do a reliable check.
 	 */
-	down_read(&inode->i_alloc_sem);
-	size = i_size_read(inode);
-	if (page->mapping != mapping || size <= page_offset(page)
-	    || !PageUptodate(page)) {
-		/* page got truncated from under us? */
-		goto out_unlock;
+	vfs_check_frozen(inode->i_sb, SB_FREEZE_WRITE);
+	/* Delalloc case is easy... */
+	if (test_opt(inode->i_sb, DELALLOC) &&
+	    !ext4_should_journal_data(inode) &&
+	    !ext4_nonda_switch(inode->i_sb)) {
+		do {
+			ret = __block_page_mkwrite(vma, vmf,
+						   ext4_da_get_block_prep);
+		} while (ret == -ENOSPC &&
+		       ext4_should_retry_alloc(inode->i_sb, &retries));
+		goto out_ret;
 	}
-	ret = 0;
 
 	lock_page(page);
-	wait_on_page_writeback(page);
-	if (PageMappedToDisk(page)) {
-		up_read(&inode->i_alloc_sem);
-		return VM_FAULT_LOCKED;
+	size = i_size_read(inode);
+	/* Page got truncated from under us? */
+	if (page->mapping != mapping || page_offset(page) > size) {
+		unlock_page(page);
+		ret = VM_FAULT_NOPAGE;
+		goto out;
 	}
 
 	if (page->index == size >> PAGE_CACHE_SHIFT)
 		len = size & ~PAGE_CACHE_MASK;
 	else
 		len = PAGE_CACHE_SIZE;
-
 	/*
-	 * return if we have all the buffers mapped. This avoid
-	 * the need to call write_begin/write_end which does a
-	 * journal_start/journal_stop which can block and take
-	 * long time
+	 * Return if we have all the buffers mapped. This avoids the need to do
+	 * journal_start/journal_stop which can block and take a long time
 	 */
 	if (page_has_buffers(page)) {
 		if (!walk_page_buffers(NULL, page_buffers(page), 0, len, NULL,
 					ext4_bh_unmapped)) {
-			up_read(&inode->i_alloc_sem);
-			return VM_FAULT_LOCKED;
+			/* Wait so that we don't change page under IO */
+			wait_on_page_writeback(page);
+			ret = VM_FAULT_LOCKED;
+			goto out;
 		}
 	}
 	unlock_page(page);
-	/*
-	 * OK, we need to fill the hole... Do write_begin write_end
-	 * to do block allocation/reservation.We are not holding
-	 * inode.i__mutex here. That allow * parallel write_begin,
-	 * write_end call. lock_page prevent this from happening
-	 * on the same page though
-	 */
-	ret = mapping->a_ops->write_begin(file, mapping, page_offset(page),
-			len, AOP_FLAG_UNINTERRUPTIBLE, &page, &fsdata);
-	if (ret < 0)
-		goto out_unlock;
-	ret = mapping->a_ops->write_end(file, mapping, page_offset(page),
-			len, len, page, fsdata);
-	if (ret < 0)
-		goto out_unlock;
-	ret = 0;
-
-	/*
-	 * write_begin/end might have created a dirty page and someone
-	 * could wander in and start the IO.  Make sure that hasn't
-	 * happened.
-	 */
-	lock_page(page);
-	wait_on_page_writeback(page);
-	up_read(&inode->i_alloc_sem);
-	return VM_FAULT_LOCKED;
-out_unlock:
-	if (ret)
+	/* OK, we need to fill the hole... */
+	if (ext4_should_dioread_nolock(inode))
+		get_block = ext4_get_block_write;
+	else
+		get_block = ext4_get_block;
+retry_alloc:
+	handle = ext4_journal_start(inode, ext4_writepage_trans_blocks(inode));
+	if (IS_ERR(handle)) {
 		ret = VM_FAULT_SIGBUS;
-	up_read(&inode->i_alloc_sem);
+		goto out;
+	}
+	ret = __block_page_mkwrite(vma, vmf, get_block);
+	if (!ret && ext4_should_journal_data(inode)) {
+		if (walk_page_buffers(handle, page_buffers(page), 0,
+			  PAGE_CACHE_SIZE, NULL, do_journal_get_write_access)) {
+			unlock_page(page);
+			ret = VM_FAULT_SIGBUS;
+			goto out;
+		}
+		ext4_set_inode_state(inode, EXT4_STATE_JDATA);
+	}
+	ext4_journal_stop(handle);
+	if (ret == -ENOSPC && ext4_should_retry_alloc(inode->i_sb, &retries))
+		goto retry_alloc;
+out_ret:
+	ret = block_page_mkwrite_return(ret);
+out:
 	return ret;
 }

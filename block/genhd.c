@@ -628,6 +628,52 @@ void add_disk(struct gendisk *disk)
 }
 EXPORT_SYMBOL(add_disk);
 
+/*
+ * Duplicate from block/genhd.c del_gendisk(), but disable
+ * fsync_bdev().
+ */
+void del_gendisk_async(struct gendisk *disk)
+{
+	struct disk_part_iter piter;
+	struct hd_struct *part;
+
+	disk_del_events(disk);
+
+	/* invalidate stuff */
+	disk_part_iter_init(&piter, disk,
+			     DISK_PITER_INCL_EMPTY | DISK_PITER_REVERSE);
+	while ((part = disk_part_iter_next(&piter))) {
+		struct block_device *bdev = bdget_disk(disk, part->partno);
+		if (bdev) {
+			__invalidate_device(bdev, true);
+			bdput(bdev);
+		}
+		delete_partition(disk, part->partno);
+	}
+	disk_part_iter_exit(&piter);
+
+	invalidate_partition(disk, 0);
+	blk_free_devt(disk_to_dev(disk)->devt);
+	set_capacity(disk, 0);
+	disk->flags &= ~GENHD_FL_UP;
+
+	sysfs_remove_link(&disk_to_dev(disk)->kobj, "bdi");
+	bdi_unregister(&disk->queue->backing_dev_info);
+	blk_unregister_queue(disk);
+	blk_unregister_region(disk_devt(disk), disk->minors);
+
+	part_stat_set_all(&disk->part0, 0);
+	disk->part0.stamp = 0;
+
+	kobject_put(disk->part0.holder_dir);
+	kobject_put(disk->slave_dir);
+	disk->driverfs_dev = NULL;
+	if (!sysfs_deprecated)
+		sysfs_remove_link(block_depr, dev_name(disk_to_dev(disk)));
+	device_del(disk_to_dev(disk));
+}
+EXPORT_SYMBOL(del_gendisk_async);
+
 void del_gendisk(struct gendisk *disk)
 {
 	struct disk_part_iter piter;
@@ -1530,30 +1576,32 @@ void disk_unblock_events(struct gendisk *disk)
 }
 
 /**
- * disk_check_events - schedule immediate event checking
- * @disk: disk to check events for
+ * disk_flush_events - schedule immediate event checking and flushing
+ * @disk: disk to check and flush events for
+ * @mask: events to flush
  *
- * Schedule immediate event checking on @disk if not blocked.
+ * Schedule immediate event checking on @disk if not blocked.  Events in
+ * @mask are scheduled to be cleared from the driver.  Note that this
+ * doesn't clear the events from @disk->ev.
  *
  * CONTEXT:
- * Don't care.  Safe to call from irq context.
+ * If @mask is non-zero must be called with bdev->bd_mutex held.
  */
-void disk_check_events(struct gendisk *disk)
+void disk_flush_events(struct gendisk *disk, unsigned int mask)
 {
 	struct disk_events *ev = disk->ev;
-	unsigned long flags;
 
 	if (!ev)
 		return;
 
-	spin_lock_irqsave(&ev->lock, flags);
+	spin_lock_irq(&ev->lock);
+	ev->clearing |= mask;
 	if (!ev->block) {
 		cancel_delayed_work(&ev->dwork);
 		queue_delayed_work(system_nrt_freezable_wq, &ev->dwork, 0);
 	}
-	spin_unlock_irqrestore(&ev->lock, flags);
+	spin_unlock_irq(&ev->lock);
 }
-EXPORT_SYMBOL_GPL(disk_check_events);
 
 /**
  * disk_clear_events - synchronously check, clear and return pending events
@@ -1743,7 +1791,7 @@ static int disk_events_set_dfl_poll_msecs(const char *val,
 	mutex_lock(&disk_events_mutex);
 
 	list_for_each_entry(ev, &disk_events, node)
-		disk_check_events(ev->disk);
+		disk_flush_events(ev->disk, 0);
 
 	mutex_unlock(&disk_events_mutex);
 

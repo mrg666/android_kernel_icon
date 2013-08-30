@@ -317,6 +317,7 @@ struct inodes_stat_t {
 #define BLKPBSZGET _IO(0x12,123)
 #define BLKDISCARDZEROES _IO(0x12,124)
 #define BLKSECDISCARD _IO(0x12,125)
+#define BLKSANITIZE _IO(0x12, 126)
 
 #define BMAP_IOCTL 1		/* obsolete - kept for compatibility */
 #define FIBMAP	   _IO(0x00,1)	/* bmap access */
@@ -781,7 +782,7 @@ struct inode {
 	struct timespec		i_ctime;
 	blkcnt_t		i_blocks;
 	unsigned short          i_bytes;
-	struct rw_semaphore	i_alloc_sem;
+	atomic_t		i_dio_count;
 	const struct file_operations	*i_fop;	/* former ->i_op->default_file_ops */
 	struct file_lock	*i_flock;
 	struct address_space	*i_mapping;
@@ -1698,6 +1699,10 @@ struct super_operations {
  *			set during data writeback, and cleared with a wakeup
  *			on the bit address once it is done.
  *
+ * I_REFERENCED		Marks the inode as recently references on the LRU list.
+ *
+ * I_DIO_WAKEUP		Never set.  Only used as a key for wait_on_bit().
+ *
  * Q: What is the difference between I_WILL_FREE and I_FREEING?
  */
 #define I_DIRTY_SYNC		(1 << 0)
@@ -1711,6 +1716,8 @@ struct super_operations {
 #define __I_SYNC		7
 #define I_SYNC			(1 << __I_SYNC)
 #define I_REFERENCED		(1 << 8)
+#define __I_DIO_WAKEUP		9
+#define I_DIO_WAKEUP		(1 << I_DIO_WAKEUP)
 
 #define I_DIRTY (I_DIRTY_SYNC | I_DIRTY_DATASYNC | I_DIRTY_PAGES)
 
@@ -1821,7 +1828,6 @@ struct file_system_type {
 	struct lock_class_key i_lock_key;
 	struct lock_class_key i_mutex_key;
 	struct lock_class_key i_mutex_dir_key;
-	struct lock_class_key i_alloc_sem_key;
 };
 
 extern struct dentry *mount_ns(struct file_system_type *fs_type, int flags,
@@ -1874,7 +1880,6 @@ extern int register_filesystem(struct file_system_type *);
 extern int unregister_filesystem(struct file_system_type *);
 extern struct vfsmount *kern_mount_data(struct file_system_type *, void *data);
 #define kern_mount(type) kern_mount_data(type, NULL)
-extern void kern_unmount(struct vfsmount *mnt);
 extern int may_umount_tree(struct vfsmount *);
 extern int may_umount(struct vfsmount *);
 extern long do_mount(char *, char *, char *, unsigned long, void *);
@@ -2284,8 +2289,7 @@ extern void __iget(struct inode * inode);
 extern void iget_failed(struct inode *);
 extern void end_writeback(struct inode *);
 extern void __destroy_inode(struct inode *);
-extern struct inode *new_inode_pseudo(struct super_block *sb);
-extern struct inode *new_inode(struct super_block *sb);
+extern struct inode *new_inode(struct super_block *);
 extern void free_inode_nonrcu(struct inode *inode);
 extern int should_remove_suid(struct dentry *);
 extern int file_remove_suid(struct file *);
@@ -2377,6 +2381,8 @@ enum {
 };
 
 void dio_end_io(struct bio *bio, int error);
+void inode_dio_wait(struct inode *inode);
+void inode_dio_done(struct inode *inode);
 
 ssize_t __blockdev_direct_IO(int rw, struct kiocb *iocb, struct inode *inode,
 	struct block_device *bdev, const struct iovec *iov, loff_t offset,
