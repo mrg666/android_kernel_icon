@@ -28,9 +28,9 @@
 #include "logger.h"
 
 #include <asm/ioctls.h>
-#ifdef CONFIG_SEC_DEBUG
-#include <mach/sec_debug.h>
-static char klog_buf[256];
+
+#ifndef CONFIG_LOGCAT_SIZE
+#define CONFIG_LOGCAT_SIZE 256
 #endif
 
 /*
@@ -409,19 +409,6 @@ static ssize_t do_write_log_from_user(struct logger_log *log,
 		if (copy_from_user(log->buffer, buf + len, count - len))
 			return -EFAULT;
 
-#ifdef CONFIG_SEC_DEBUG
-	memset(klog_buf, 0, 255);
-		if (strncmp(log->buffer + log->w_off, "!@", 2) == 0) {
-			if (count < 255)
-				memcpy(klog_buf, log->buffer + log->w_off,
-				count);
-			else
-				memcpy(klog_buf, log->buffer + log->w_off,
-				255);
-				klog_buf[255] = 0;
-		}
-#endif
-
 	log->w_off = logger_offset(log->w_off + count);
 
 	return count;
@@ -436,7 +423,7 @@ ssize_t logger_aio_write(struct kiocb *iocb, const struct iovec *iov,
 			 unsigned long nr_segs, loff_t ppos)
 {
 	struct logger_log *log = file_get_log(iocb->ki_filp);
-	size_t orig = log->w_off;
+	size_t orig;
 	struct logger_entry header;
 	struct timespec now;
 	ssize_t ret = 0;
@@ -457,6 +444,8 @@ ssize_t logger_aio_write(struct kiocb *iocb, const struct iovec *iov,
 
 	mutex_lock(&log->mutex);
 
+	orig = log->w_off;
+	
 	/*
 	 * Fix up any readers, pulling them forward to the first readable
 	 * entry after (what will be) the new write offset. We do this now
@@ -490,11 +479,6 @@ ssize_t logger_aio_write(struct kiocb *iocb, const struct iovec *iov,
 
 	/* wake up any blocked readers */
 	wake_up_interruptible(&log->wq);
-
-#ifdef CONFIG_SEC_DEBUG
-	if (strncmp(klog_buf, "!@", 2) == 0)
-		printk(KERN_INFO "%s\n", klog_buf);
-#endif
 
 	return ret;
 }
@@ -554,7 +538,12 @@ static int logger_release(struct inode *ignored, struct file *file)
 {
 	if (file->f_mode & FMODE_READ) {
 		struct logger_reader *reader = file->private_data;
+		struct logger_log *log = reader->log;
+
+		mutex_lock(&log->mutex);
 		list_del(&reader->list);
+		mutex_unlock(&log->mutex);
+
 		kfree(reader);
 	}
 
@@ -717,10 +706,10 @@ static struct logger_log VAR = { \
 	.size = SIZE, \
 };
 
-DEFINE_LOGGER_DEVICE(log_main, LOGGER_LOG_MAIN, 256*1024)
-DEFINE_LOGGER_DEVICE(log_events, LOGGER_LOG_EVENTS, 256*1024)
-DEFINE_LOGGER_DEVICE(log_radio, LOGGER_LOG_RADIO, 256*1024)
-DEFINE_LOGGER_DEVICE(log_system, LOGGER_LOG_SYSTEM, 256*1024)
+DEFINE_LOGGER_DEVICE(log_main, LOGGER_LOG_MAIN, CONFIG_LOGCAT_SIZE*1024)
+DEFINE_LOGGER_DEVICE(log_events, LOGGER_LOG_EVENTS, CONFIG_LOGCAT_SIZE*1024)
+DEFINE_LOGGER_DEVICE(log_radio, LOGGER_LOG_RADIO, CONFIG_LOGCAT_SIZE*1024)
+DEFINE_LOGGER_DEVICE(log_system, LOGGER_LOG_SYSTEM, CONFIG_LOGCAT_SIZE*1024)
 
 static struct logger_log *get_log_from_minor(int minor)
 {
@@ -772,10 +761,6 @@ static int __init logger_init(void)
 	if (unlikely(ret))
 		goto out;
 
-#ifdef CONFIG_SEC_DEBUG
-	sec_getlog_supply_loggerinfo(_buf_log_main, _buf_log_radio,
-		_buf_log_events, _buf_log_system);
-#endif
 out:
 	return ret;
 }
