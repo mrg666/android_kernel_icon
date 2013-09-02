@@ -1614,9 +1614,6 @@ static struct i2c_board_info yamahaamp_boardinfo[] = {
 static uint32_t audio_pamp_gpio_config =
 GPIO_CFG(82, 0, GPIO_CFG_OUTPUT, GPIO_CFG_NO_PULL, GPIO_CFG_2MA);
 
-static uint32_t audio_fluid_icodec_tx_config =
-GPIO_CFG(85, 0, GPIO_CFG_OUTPUT, GPIO_CFG_NO_PULL, GPIO_CFG_2MA);
-
 static int __init snddev_poweramp_gpio_init(void)
 {
 	int rc;
@@ -2787,153 +2784,6 @@ static void msm_timpani_shutdown_power(void)
 		       ARRAY_SIZE(timpani_reset_gpio_cfg));
 };
 
-static unsigned int msm_bahama_core_config(int type)
-{
-	int rc = 0;
-
-	if (type == BAHAMA_ID) {
-
-		int i;
-		struct marimba config = {.mod_id = SLAVE_ID_BAHAMA };
-
-		const struct bahama_config_register v20_init[] = {
-			/* reg, value, mask */
-			{0xF4, 0x84, 0xFF},	/* AREG */
-			{0xF0, 0x04, 0xFF}	/* DREG */
-		};
-
-		if (read_bahama_ver() == VER_2_0) {
-			for (i = 0; i < ARRAY_SIZE(v20_init); i++) {
-				u8 value = v20_init[i].value;
-				rc = marimba_write_bit_mask(&config,
-							    v20_init[i].reg,
-							    &value,
-							    sizeof(v20_init
-								   [i].value),
-							    v20_init[i].mask);
-				if (rc < 0) {
-					printk(KERN_ERR
-					       "%s: reg %d write failed: %d\n",
-					       __func__, v20_init[i].reg, rc);
-					return rc;
-				}
-				printk(KERN_INFO "%s: reg 0x%02x value 0x%02x"
-				       " mask 0x%02x\n",
-				       __func__, v20_init[i].reg,
-				       v20_init[i].value, v20_init[i].mask);
-			}
-		}
-	}
-	printk(KERN_INFO "core type: %d\n", type);
-
-	return rc;
-}
-
-static unsigned int msm_bahama_setup_power(void)
-{
-	int rc = regulator_enable(vreg_bahama);
-
-	if (rc)
-		pr_err("%s: regulator_enable failed (%d)\n", __func__, rc);
-
-	return rc;
-};
-
-static unsigned int msm_bahama_shutdown_power(int value)
-{
-	int rc = 0;
-
-	if (value != BAHAMA_ID) {
-		rc = regulator_disable(vreg_bahama);
-
-		if (rc)
-			pr_err("%s: regulator_disable failed (%d)\n",
-			       __func__, rc);
-	}
-
-	return rc;
-};
-
-static struct msm_gpio marimba_svlte_config_clock[] = {
-	{GPIO_CFG(34, 0, GPIO_CFG_OUTPUT, GPIO_CFG_NO_PULL, GPIO_CFG_2MA),
-	 "MARIMBA_SVLTE_CLOCK_ENABLE"},
-};
-
-static unsigned int msm_marimba_gpio_config_svlte(int gpio_cfg_marimba)
-{
-	if (machine_is_msm8x55_svlte_surf() || machine_is_msm8x55_svlte_ffa()) {
-		if (gpio_cfg_marimba)
-			gpio_set_value(GPIO_PIN
-				       (marimba_svlte_config_clock->gpio_cfg),
-				       1);
-		else
-			gpio_set_value(GPIO_PIN
-				       (marimba_svlte_config_clock->gpio_cfg),
-				       0);
-	}
-
-	return 0;
-};
-
-static unsigned int msm_marimba_setup_power(void)
-{
-	int rc;
-
-	rc = regulator_enable(vreg_marimba_1);
-	if (rc) {
-		pr_err("%s: regulator_enable failed (%d)\n", __func__, rc);
-		goto out;
-	}
-
-	rc = regulator_enable(vreg_marimba_2);
-	if (rc) {
-		pr_err("%s: regulator_enable failed (%d)\n", __func__, rc);
-		goto disable_marimba_1;
-	}
-
-	if (machine_is_msm8x55_svlte_surf() || machine_is_msm8x55_svlte_ffa()) {
-		rc = msm_gpios_request_enable(marimba_svlte_config_clock,
-					      ARRAY_SIZE
-					      (marimba_svlte_config_clock));
-		if (rc < 0) {
-			pr_err("%s: msm_gpios_request_enable failed (%d)\n",
-			       __func__, rc);
-			goto disable_marimba_2;
-		}
-
-		rc = gpio_direction_output(GPIO_PIN
-					   (marimba_svlte_config_clock->
-					    gpio_cfg), 0);
-		if (rc < 0) {
-			pr_err("%s: gpio_direction_output failed (%d)\n",
-			       __func__, rc);
-			goto disable_marimba_2;
-		}
-	}
-
-	return 0;
-
- disable_marimba_2:
-	regulator_disable(vreg_marimba_2);
- disable_marimba_1:
-	regulator_disable(vreg_marimba_1);
- out:
-	return rc;
-};
-
-static void msm_marimba_shutdown_power(void)
-{
-	int rc;
-
-	rc = regulator_disable(vreg_marimba_2);
-	if (rc)
-		pr_err("%s: regulator_disable failed (%d)\n", __func__, rc);
-
-	rc = regulator_disable(vreg_marimba_1);
-	if (rc)
-		pr_err("%s: regulator_disable failed (%d)\n", __func__, rc);
-};
-
 static int bahama_present(void)
 {
 	int id;
@@ -2953,140 +2803,6 @@ static int bahama_present(void)
 }
 
 struct regulator *fm_regulator;
-static int fm_radio_setup(struct marimba_fm_platform_data *pdata)
-{
-	int rc, voltage;
-	uint32_t irqcfg;
-	const char *id = "FMPW";
-
-	int bahama_not_marimba = bahama_present();
-
-	if (bahama_not_marimba < 0) {
-		pr_warn("%s: bahama_present: %d\n",
-			__func__, bahama_not_marimba);
-		rc = -ENODEV;
-		goto out;
-	}
-	if (bahama_not_marimba) {
-		fm_regulator = regulator_get(NULL, "s3");
-		voltage = 1800000;
-	} else {
-		fm_regulator = regulator_get(NULL, "s2");
-		voltage = 1300000;
-	}
-
-	if (IS_ERR(fm_regulator)) {
-		rc = PTR_ERR(fm_regulator);
-		pr_err("%s: regulator_get failed (%d)\n", __func__, rc);
-		goto out;
-	}
-
-	rc = regulator_set_voltage(fm_regulator, voltage, voltage);
-
-	if (rc) {
-		pr_err("%s: regulator_set_voltage failed (%d)\n", __func__, rc);
-		goto regulator_free;
-	}
-
-	rc = regulator_enable(fm_regulator);
-
-	if (rc) {
-		pr_err("%s: regulator_enable failed (%d)\n", __func__, rc);
-		goto regulator_free;
-	}
-
-	rc = pmapp_clock_vote(id, PMAPP_CLOCK_ID_DO, PMAPP_CLOCK_VOTE_ON);
-
-	if (rc < 0) {
-		pr_err("%s: clock vote failed (%d)\n", __func__, rc);
-		goto regulator_disable;
-	}
-
-	/*Request the Clock Using GPIO34/AP2MDM_MRMBCK_EN in case
-	   of svlte */
-	if (machine_is_msm8x55_svlte_surf() || machine_is_msm8x55_svlte_ffa()) {
-		rc = marimba_gpio_config(1);
-		if (rc < 0) {
-			pr_err("%s: clock enable for svlte : %d\n",
-			       __func__, rc);
-			goto clock_devote;
-		}
-	}
-	irqcfg = GPIO_CFG(147, 0, GPIO_CFG_INPUT, GPIO_CFG_NO_PULL,
-			  GPIO_CFG_2MA);
-	rc = gpio_tlmm_config(irqcfg, GPIO_CFG_ENABLE);
-	if (rc) {
-		pr_err("%s: gpio_tlmm_config(%#x)=%d\n", __func__, irqcfg, rc);
-		rc = -EIO;
-		goto gpio_deconfig;
-
-	}
-	return 0;
-
- gpio_deconfig:
-	if (machine_is_msm8x55_svlte_surf() || machine_is_msm8x55_svlte_ffa())
-		marimba_gpio_config(0);
- clock_devote:
-	pmapp_clock_vote(id, PMAPP_CLOCK_ID_DO, PMAPP_CLOCK_VOTE_OFF);
- regulator_disable:
-	regulator_disable(fm_regulator);
- regulator_free:
-	regulator_put(fm_regulator);
-	fm_regulator = NULL;
- out:
-	return rc;
-};
-
-static void fm_radio_shutdown(struct marimba_fm_platform_data *pdata)
-{
-	int rc;
-	const char *id = "FMPW";
-	uint32_t irqcfg = GPIO_CFG(147, 0, GPIO_CFG_INPUT, GPIO_CFG_PULL_UP,
-				   GPIO_CFG_2MA);
-
-	int bahama_not_marimba = bahama_present();
-	if (bahama_not_marimba == -1) {
-		pr_warn("%s: bahama_present: %d\n",
-			__func__, bahama_not_marimba);
-		return;
-	}
-
-	rc = gpio_tlmm_config(irqcfg, GPIO_CFG_ENABLE);
-	if (rc)
-		pr_err("%s: gpio_tlmm_config(%#x)=%d\n", __func__, irqcfg, rc);
-
-	if (!IS_ERR_OR_NULL(fm_regulator)) {
-		rc = regulator_disable(fm_regulator);
-
-		if (rc)
-			pr_err("%s: return val: %d\n", __func__, rc);
-
-		regulator_put(fm_regulator);
-		fm_regulator = NULL;
-	}
-	rc = pmapp_clock_vote(id, PMAPP_CLOCK_ID_DO, PMAPP_CLOCK_VOTE_OFF);
-	if (rc < 0)
-		pr_err("%s: clock_vote return val: %d\n", __func__, rc);
-
-	/*Disable the Clock Using GPIO34/AP2MDM_MRMBCK_EN in case
-	   of svlte */
-	if (machine_is_msm8x55_svlte_surf() || machine_is_msm8x55_svlte_ffa()) {
-		rc = marimba_gpio_config(0);
-		if (rc < 0)
-			pr_err("%s: clock disable for svlte : %d\n",
-			       __func__, rc);
-	}
-}
-
-static struct marimba_fm_platform_data marimba_fm_pdata = {
-	.fm_setup = fm_radio_setup,
-	.fm_shutdown = fm_radio_shutdown,
-	.irq = MSM_GPIO_TO_INT(147),
-	.vreg_s2 = NULL,
-	.vreg_xo_out = NULL,
-	.is_fm_soc_i2s_master = false,
-	.config_i2s_gpio = NULL,
-};
 
 /* Slave id address for FM/CDC/QMEMBIST
  * Values can be programmed using Marimba slave id 0
@@ -3098,169 +2814,6 @@ static struct marimba_fm_platform_data marimba_fm_pdata = {
 
 #define BAHAMA_SLAVE_ID_FM_ADDR         0x2A
 #define BAHAMA_SLAVE_ID_QMEMBIST_ADDR   0x7B
-
-static const char *tsadc_id = "MADC";
-
-static struct regulator_bulk_data regs_tsadc_marimba[] = {
-	{.supply = "gp12", .min_uV = 2200000, .max_uV = 2200000},
-	{.supply = "s2", .min_uV = 1300000, .max_uV = 1300000},
-};
-
-static struct regulator_bulk_data regs_tsadc_timpani[] = {
-	{.supply = "s3", .min_uV = 1800000, .max_uV = 1800000},
-	{.supply = "gp12", .min_uV = 2200000, .max_uV = 2200000},
-	{.supply = "gp16", .min_uV = 1200000, .max_uV = 1200000},
-};
-
-static struct regulator_bulk_data *regs_tsadc;
-static int regs_tsadc_count;
-
-static int marimba_tsadc_power(int vreg_on)
-{
-	int rc = 0;
-	int tsadc_adie_type = adie_get_detected_codec_type();
-
-	switch (tsadc_adie_type) {
-	case TIMPANI_ID:
-		rc = pmapp_clock_vote(tsadc_id, PMAPP_CLOCK_ID_D1,
-				      vreg_on ? PMAPP_CLOCK_VOTE_ON :
-				      PMAPP_CLOCK_VOTE_OFF);
-		if (rc) {
-			pr_err("%s: unable to %svote for d1 clk\n",
-			       __func__, vreg_on ? "" : "de-");
-			goto D1_vote_fail;
-		}
-
-		/* fall through */
-	case MARIMBA_ID:
-		rc = pmapp_clock_vote(tsadc_id, PMAPP_CLOCK_ID_DO,
-				      vreg_on ? PMAPP_CLOCK_VOTE_ON :
-				      PMAPP_CLOCK_VOTE_OFF);
-		if (rc) {
-			pr_err("%s: unable to %svote for d1 clk\n",
-			       __func__, vreg_on ? "" : "de-");
-			goto D0_vote_fail;
-		}
-
-		WARN_ON(regs_tsadc_count == 0);
-
-		rc = vreg_on ?
-		    regulator_bulk_enable(regs_tsadc_count, regs_tsadc) :
-		    regulator_bulk_disable(regs_tsadc_count, regs_tsadc);
-
-		if (rc) {
-			pr_err("%s: regulator %sable failed: %d\n",
-			       __func__, vreg_on ? "en" : "dis", rc);
-			goto regulator_switch_fail;
-		}
-
-		break;
-	default:
-		pr_err("%s:Adie %d not supported\n", __func__, tsadc_adie_type);
-		return -ENODEV;
-	}
-
-	msleep(5);		/* ensure power is stable */
-
-	return 0;
-
- regulator_switch_fail:
-	pmapp_clock_vote(tsadc_id, PMAPP_CLOCK_ID_DO,
-			 vreg_on ? PMAPP_CLOCK_VOTE_OFF : PMAPP_CLOCK_VOTE_ON);
- D0_vote_fail:
-	if (tsadc_adie_type == TIMPANI_ID)
-		pmapp_clock_vote(tsadc_id, PMAPP_CLOCK_ID_D1,
-				 vreg_on ? PMAPP_CLOCK_VOTE_OFF :
-				 PMAPP_CLOCK_VOTE_ON);
- D1_vote_fail:
-	return rc;
-}
-
-static int marimba_tsadc_init(void)
-{
-	int rc = 0;
-	int tsadc_adie_type = adie_get_detected_codec_type();
-
-	switch (tsadc_adie_type) {
-	case MARIMBA_ID:
-		regs_tsadc = regs_tsadc_marimba;
-		regs_tsadc_count = ARRAY_SIZE(regs_tsadc_marimba);
-		break;
-	case TIMPANI_ID:
-		regs_tsadc = regs_tsadc_timpani;
-		regs_tsadc_count = ARRAY_SIZE(regs_tsadc_timpani);
-		break;
-	default:
-		pr_err("%s:Adie %d not supported\n", __func__, tsadc_adie_type);
-		rc = -ENODEV;
-		goto out;
-	}
-
-	rc = regulator_bulk_get(NULL, regs_tsadc_count, regs_tsadc);
-	if (rc) {
-		pr_err("%s: could not get regulators: %d\n", __func__, rc);
-		goto out;
-	}
-
-	rc = regulator_bulk_set_voltage(regs_tsadc_count, regs_tsadc);
-	if (rc) {
-		pr_err("%s: could not set regulator voltages: %d\n",
-		       __func__, rc);
-		goto vreg_free;
-	}
-
-	return 0;
-
- vreg_free:
-	regulator_bulk_free(regs_tsadc_count, regs_tsadc);
- out:
-	regs_tsadc = NULL;
-	regs_tsadc_count = 0;
-	return rc;
-}
-
-static int marimba_tsadc_exit(void)
-{
-	regulator_bulk_free(regs_tsadc_count, regs_tsadc);
-	regs_tsadc_count = 0;
-	regs_tsadc = NULL;
-
-	return 0;
-}
-
-static struct msm_ts_platform_data msm_ts_data = {
-	.min_x = 284,
-	.max_x = 3801,
-	.min_y = 155,
-	.max_y = 3929,
-	.min_press = 0,
-	.max_press = 255,
-	.inv_x = 4096,
-	.inv_y = 4096,
-	.can_wakeup = false,
-};
-
-static struct marimba_tsadc_platform_data marimba_tsadc_pdata = {
-	.marimba_tsadc_power = marimba_tsadc_power,
-	.init = marimba_tsadc_init,
-	.exit = marimba_tsadc_exit,
-	.tsadc_prechg_en = true,
-	.can_wakeup = false,
-	.setup = {
-		  .pen_irq_en = true,
-		  .tsadc_en = true,
-		  },
-	.params2 = {
-		    .input_clk_khz = 2400,
-		    .sample_prd = TSADC_CLK_3,
-		    },
-	.params3 = {
-		    .prechg_time_nsecs = 6400,
-		    .stable_time_nsecs = 6400,
-		    .tsadc_test_mode = 0,
-		    },
-	.tssc_data = &msm_ts_data,
-};
 
 static struct regulator_bulk_data codec_regs[] = {
 	{.supply = "s4", .min_uV = 2200000, .max_uV = 2200000},
@@ -3304,30 +2857,6 @@ static int msm_marimba_codec_power(int vreg_on)
 
 	return 0;
 }
-
-static struct marimba_codec_platform_data mariba_codec_pdata = {
-	.marimba_codec_power = msm_marimba_codec_power,
-#ifdef CONFIG_MARIMBA_CODEC
-	.snddev_profile_init = msm_snddev_init,
-#endif
-};
-
-static struct marimba_platform_data marimba_pdata = {
-	.slave_id[MARIMBA_SLAVE_ID_FM] = MARIMBA_SLAVE_ID_FM_ADDR,
-	.slave_id[MARIMBA_SLAVE_ID_CDC] = MARIMBA_SLAVE_ID_CDC_ADDR,
-	.slave_id[MARIMBA_SLAVE_ID_QMEMBIST] = MARIMBA_SLAVE_ID_QMEMBIST_ADDR,
-	.slave_id[SLAVE_ID_BAHAMA_FM] = BAHAMA_SLAVE_ID_FM_ADDR,
-	.slave_id[SLAVE_ID_BAHAMA_QMEMBIST] = BAHAMA_SLAVE_ID_QMEMBIST_ADDR,
-	.marimba_setup = msm_marimba_setup_power,
-	.marimba_shutdown = msm_marimba_shutdown_power,
-	.bahama_setup = msm_bahama_setup_power,
-	.bahama_shutdown = msm_bahama_shutdown_power,
-	.marimba_gpio_config = msm_marimba_gpio_config_svlte,
-	.bahama_core_config = msm_bahama_core_config,
-	.fm = &marimba_fm_pdata,
-	.codec = &mariba_codec_pdata,
-	.tsadc_ssbi_adap = MARIMBA_SSBI_ADAP,
-};
 
 static void __init msm7x30_init_marimba(void)
 {
@@ -4118,11 +3647,6 @@ static struct msm_hdmi_platform_data adv7520_hdmi_data = {
 
 #ifdef CONFIG_TOUCHSCREEN_MELFAS
 
-static struct platform_device touchscreen_device_melfas = {
-	.name = "melfas-ts",
-	.id = -1,
-};
-
 static struct platform_device touchscreen_device_melfas_05 = {
 	.name = "melfas-ts",
 	.id = -1,
@@ -4329,13 +3853,6 @@ static struct i2c_board_info msm_i2c_board_info[] = {
 	 I2C_BOARD_INFO("adv7520", ADV7520_I2C_ADDR),
 	 .platform_data = &adv7520_hdmi_data,
 	 },
-};
-
-static struct i2c_board_info msm_marimba_board_info[] = {
-	{
-		I2C_BOARD_INFO("marimba", 0xc),
-		.platform_data = &marimba_pdata,
-	}
 };
 
 static struct msm_handset_platform_data hs_platform_data = {
@@ -4839,22 +4356,6 @@ static struct platform_device lcdc_s6d05a1_panel_device = {
 		}
 };
 
-static struct msm_panel_common_pdata lcdc_sharp_panel_data = {
-#ifndef CONFIG_SPI_QSD
-	.panel_config_gpio = lcdc_config_gpios,
-	.gpio_num = lcdc_gpio_array_num,
-#endif
-	.gpio = 2,		/* LPG PMIC_GPIO26 channel number */
-};
-
-static struct platform_device lcdc_sharp_panel_device = {
-	.name = "lcdc_sharp_wvga",
-	.id = 0,
-	.dev = {
-		.platform_data = &lcdc_sharp_panel_data,
-		}
-};
-
 static struct msm_gpio dtv_panel_irq_gpios[] = {
 	{GPIO_CFG(18, 0, GPIO_CFG_INPUT, GPIO_CFG_NO_PULL, GPIO_CFG_4MA),
 	 "hdmi_int"},
@@ -5308,7 +4809,7 @@ static int __init update_panel_info(char *panel_name)
 	static int lcd_id = -1;
 
 	if (!strncmp(src, "GET", 3)) {
-		printk(KERN_INFO, "%s : Lcd name is %s\n",
+		printk(KERN_INFO "%s : Lcd name is %s\n",
 		       __func__, panel[lcd_id - 1]);
 		return lcd_id;
 	} else {
@@ -5320,11 +4821,11 @@ static int __init update_panel_info(char *panel_name)
 		}
 
 		if (lcd_id == -1) {
-			printk(KERN_INFO, "%s : Fail to get lcd panel name"
+			printk(KERN_INFO "%s : Fail to get lcd panel name"
 			       " from bootloader\n", __func__);
 			lcd_id = panel_id[1];
 		} else {
-			printk(KERN_INFO, "%s : Success to get"
+			printk(KERN_INFO "%s : Success to get"
 			       "lcd panel name(%s) from bootloader\n",
 			       __func__, panel[lcd_id - 1]);
 		}
@@ -5535,48 +5036,10 @@ static struct platform_device qcedev_device = {
 };
 #endif
 
-static int mddi_toshiba_pmic_bl(int level)
-{
-	int ret = -EPERM;
-
-	ret = pmic_set_led_intensity(LED_LCD, level);
-
-	if (ret)
-		printk(KERN_WARNING "%s: can't set lcd backlight!\n", __func__);
-	return ret;
-}
-
-static unsigned wega_reset_gpio =
-GPIO_CFG(180, 0, GPIO_CFG_OUTPUT, GPIO_CFG_NO_PULL, GPIO_CFG_2MA);
-
-static struct msm_gpio fluid_vee_reset_gpio[] = {
-	{GPIO_CFG(20, 0, GPIO_CFG_OUTPUT, GPIO_CFG_NO_PULL, GPIO_CFG_2MA),
-	 "vee_reset"},
-};
 
 static unsigned char quickvx_mddi_client = 1, other_mddi_client = 1;
-static unsigned char quickvx_ldo_enabled;
 
-static unsigned quickvx_vlp_gpio =
-GPIO_CFG(97, 0, GPIO_CFG_OUTPUT, GPIO_CFG_NO_PULL, GPIO_CFG_2MA);
-
-static struct pm8xxx_gpio_init_info pmic_quickvx_clk_gpio = {
-	PM8058_GPIO_PM_TO_SYS(PMIC_GPIO_QUICKVX_CLK),
-	{
-	 .direction = PM_GPIO_DIR_OUT,
-	 .output_buffer = PM_GPIO_OUT_BUF_CMOS,
-	 .output_value = 1,
-	 .pull = PM_GPIO_PULL_NO,
-	 .vin_sel = PM8058_GPIO_VIN_S3,
-	 .out_strength = PM_GPIO_STRENGTH_HIGH,
-	 .function = PM_GPIO_FUNC_2,
-	 },
-};
-
-static struct regulator *mddi_ldo20;
 static struct regulator *mddi_ldo12;
-static struct regulator *mddi_ldo16;
-static struct regulator *mddi_ldo6;
 static struct regulator *mddi_lcd;
 
 static int display_common_init(void)
@@ -6731,20 +6194,6 @@ static struct msm_gpio msm_i2c_gpios_io[] = {
 	 "i2c_sda"},
 };
 
-static struct msm_gpio qup_i2c_gpios_io[] = {
-	{GPIO_CFG(16, 0, GPIO_CFG_OUTPUT, GPIO_CFG_NO_PULL, GPIO_CFG_16MA),
-	 "qup_scl"},
-	{GPIO_CFG(17, 0, GPIO_CFG_OUTPUT, GPIO_CFG_NO_PULL, GPIO_CFG_16MA),
-	 "qup_sda"},
-};
-
-static struct msm_gpio qup_i2c_gpios_hw[] = {
-	{GPIO_CFG(16, 2, GPIO_CFG_INPUT, GPIO_CFG_NO_PULL, GPIO_CFG_16MA),
-	 "qup_scl"},
-	{GPIO_CFG(17, 2, GPIO_CFG_INPUT, GPIO_CFG_NO_PULL, GPIO_CFG_16MA),
-	 "qup_sda"},
-};
-
 static void msm_i2c_gpio_config(int adap_id, int config_type)
 {
 	struct msm_gpio *msm_i2c_table;
@@ -6763,48 +6212,6 @@ static void msm_i2c_gpio_config(int adap_id, int config_type)
 #ifndef CONFIG_QUP_EXCLUSIVE_TO_CAMERA
 static struct regulator *qup_vreg;
 #endif
-static void qup_i2c_gpio_config(int adap_id, int config_type)
-{
-	int rc = 0;
-	struct msm_gpio *qup_i2c_table;
-	/* Each adapter gets 2 lines from the table */
-	if (adap_id != 4)
-		return;
-	if (config_type)
-		qup_i2c_table = qup_i2c_gpios_hw;
-	else
-		qup_i2c_table = qup_i2c_gpios_io;
-	rc = msm_gpios_enable(qup_i2c_table, 2);
-	if (rc < 0)
-		printk(KERN_ERR "QUP GPIO enable failed: %d\n", rc);
-	/*This needs to be enabled only for OEMS */
-#ifndef CONFIG_QUP_EXCLUSIVE_TO_CAMERA
-	if (!IS_ERR_OR_NULL(qup_vreg)) {
-		rc = regulator_enable(qup_vreg);
-		if (rc) {
-			pr_err("%s: regulator_enable failed: %d\n",
-			       __func__, rc);
-		}
-	}
-#endif
-}
-
-static struct msm_i2c_platform_data msm_i2c_pdata = {
-	.clk_freq = 100000,
-	.pri_clk = 70,
-	.pri_dat = 71,
-	.rmutex = 1,
-	.rsl_id = "D:I2C02000021",
-	.msm_i2c_config_gpio = msm_i2c_gpio_config,
-};
-
-static void __init msm_device_i2c_init(void)
-{
-	if (msm_gpios_request(msm_i2c_gpios_hw, ARRAY_SIZE(msm_i2c_gpios_hw)))
-		pr_err("failed to request I2C gpios\n");
-
-	msm_device_i2c.dev.platform_data = &msm_i2c_pdata;
-}
 
 static struct msm_i2c_platform_data msm_i2c_2_pdata = {
 	.clk_freq = 100000,
@@ -6817,30 +6224,6 @@ static void __init msm_device_i2c_2_init(void)
 {
 	msm_device_i2c_2.dev.platform_data = &msm_i2c_2_pdata;
 }
-
-static struct msm_i2c_platform_data qup_i2c_pdata = {
-	.clk_freq = 384000,
-	.msm_i2c_config_gpio = qup_i2c_gpio_config,
-};
-
-static void __init qup_device_i2c_init(void)
-{
-	if (msm_gpios_request(qup_i2c_gpios_hw, ARRAY_SIZE(qup_i2c_gpios_hw)))
-		pr_err("failed to request I2C gpios\n");
-
-	qup_device_i2c.dev.platform_data = &qup_i2c_pdata;
-	/*This needs to be enabled only for OEMS */
-#ifndef CONFIG_QUP_EXCLUSIVE_TO_CAMERA
-	qup_vreg = regulator_get(&qup_device_i2c.dev, "lvsw1");
-	if (IS_ERR(qup_vreg)) {
-		dev_err(&qup_device_i2c.dev,
-			"%s: regulator_get failed: %ld\n",
-			__func__, PTR_ERR(qup_vreg));
-	}
-#endif
-}
-
-
 
 #ifdef CONFIG_I2C_SSBI
 static struct msm_i2c_ssbi_platform_data msm_i2c_ssbi7_pdata = {
@@ -6891,32 +6274,6 @@ static struct msm_gpio sdc1_cfg_data[] = {
 	 "sdc1_dat_1"},
 	{GPIO_CFG(43, 1, GPIO_CFG_OUTPUT, GPIO_CFG_PULL_UP, GPIO_CFG_8MA),
 	 "sdc1_dat_0"},
-};
-
-static struct msm_gpio sdc2_cfg_data[] = {
-	{GPIO_CFG(64, 1, GPIO_CFG_OUTPUT, GPIO_CFG_NO_PULL, GPIO_CFG_16MA),
-	 "sdc2_clk"},
-	{GPIO_CFG(65, 1, GPIO_CFG_OUTPUT, GPIO_CFG_PULL_UP, GPIO_CFG_8MA),
-	 "sdc2_cmd"},
-	{GPIO_CFG(66, 1, GPIO_CFG_OUTPUT, GPIO_CFG_PULL_UP, GPIO_CFG_8MA),
-	 "sdc2_dat_3"},
-	{GPIO_CFG(67, 1, GPIO_CFG_OUTPUT, GPIO_CFG_PULL_UP, GPIO_CFG_8MA),
-	 "sdc2_dat_2"},
-	{GPIO_CFG(68, 1, GPIO_CFG_OUTPUT, GPIO_CFG_PULL_UP, GPIO_CFG_8MA),
-	 "sdc2_dat_1"},
-	{GPIO_CFG(69, 1, GPIO_CFG_OUTPUT, GPIO_CFG_PULL_UP, GPIO_CFG_8MA),
-	 "sdc2_dat_0"},
-
-#ifdef CONFIG_MMC_MSM_SDC2_8_BIT_SUPPORT
-	{GPIO_CFG(115, 1, GPIO_CFG_OUTPUT, GPIO_CFG_PULL_UP, GPIO_CFG_8MA),
-	 "sdc2_dat_4"},
-	{GPIO_CFG(114, 1, GPIO_CFG_OUTPUT, GPIO_CFG_PULL_UP, GPIO_CFG_8MA),
-	 "sdc2_dat_5"},
-	{GPIO_CFG(113, 1, GPIO_CFG_OUTPUT, GPIO_CFG_PULL_UP, GPIO_CFG_8MA),
-	 "sdc2_dat_6"},
-	{GPIO_CFG(112, 1, GPIO_CFG_OUTPUT, GPIO_CFG_PULL_UP, GPIO_CFG_8MA),
-	 "sdc2_dat_7"},
-#endif
 };
 
 static struct msm_gpio sdc3_cfg_data[] = {
@@ -7477,30 +6834,6 @@ static unsigned int msm7x30_sdcc_slot_status(struct device *dev)
 				    (PMIC_GPIO_SD_DET - 1));
 }
 #endif
-
-static int msm_sdcc_get_wpswitch(struct device *dv)
-{
-	void __iomem *wp_addr = 0;
-	uint32_t ret = 0;
-	struct platform_device *pdev;
-
-	if (!(machine_is_msm7x30_surf()))
-		return -1;
-	pdev = container_of(dv, struct platform_device, dev);
-
-	wp_addr = ioremap(FPGA_SDCC_STATUS, 4);
-	if (!wp_addr) {
-		pr_err("%s: Could not remap %x\n", __func__, FPGA_SDCC_STATUS);
-		return -ENOMEM;
-	}
-
-	ret = (((readl(wp_addr) >> 4) >> (pdev->id - 1)) & 0x01);
-	pr_info("%s: WP Status for Slot %d = 0x%x\n", __func__, pdev->id, ret);
-	iounmap(wp_addr);
-
-	return ret;
-}
-
 #endif
 
 #if defined(CONFIG_MMC_MSM_SDC1_SUPPORT)
