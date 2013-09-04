@@ -1,6 +1,6 @@
 /* Qualcomm CE device driver.
  *
- * Copyright (c) 2010-2011, Code Aurora Forum. All rights reserved.
+ * Copyright (c) 2010-2013, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -12,7 +12,7 @@
  * GNU General Public License for more details.
  */
 #include <linux/mman.h>
-#include <linux/android_pmem.h>
+
 #include <linux/types.h>
 #include <linux/platform_device.h>
 #include <linux/dma-mapping.h>
@@ -25,7 +25,9 @@
 #include <linux/fs.h>
 #include <linux/miscdevice.h>
 #include <linux/uaccess.h>
+#ifdef CONFIG_DEBUG_FS
 #include <linux/debugfs.h>
+#endif
 #include <linux/scatterlist.h>
 #include <linux/crypto.h>
 #include <crypto/hash.h>
@@ -98,7 +100,7 @@ struct qcedev_async_req {
 };
 
 static DEFINE_MUTEX(send_cmd_lock);
-static DEFINE_MUTEX(sent_bw_req);
+static DEFINE_MUTEX(qcedev_sent_bw_req);
 /**********************************************************************
  * Register ourselves as a misc device to be able to access the dev driver
  * from userspace. */
@@ -172,26 +174,56 @@ static int qcedev_scm_cmd(int resource, int cmd, int *response)
 #endif
 }
 
-static int qcedev_ce_high_bw_req(struct qcedev_control *podev,
+static void qcedev_ce_high_bw_req(struct qcedev_control *podev,
 							bool high_bw_req)
 {
 	int ret = 0;
 
-	mutex_lock(&sent_bw_req);
+	mutex_lock(&qcedev_sent_bw_req);
 	if (high_bw_req) {
-		if (podev->high_bw_req_count == 0)
-			msm_bus_scale_client_update_request(
+		if (podev->high_bw_req_count == 0) {
+			ret = qce_enable_clk(podev->qce);
+			if (ret) {
+				pr_err("%s Unable enable clk\n", __func__);
+				mutex_unlock(&qcedev_sent_bw_req);
+				return;
+			}
+			ret = msm_bus_scale_client_update_request(
 					podev->bus_scale_handle, 1);
+			if (ret) {
+				pr_err("%s Unable to set to high bandwidth\n",
+							__func__);
+				ret = qce_disable_clk(podev->qce);
+				mutex_unlock(&qcedev_sent_bw_req);
+				return;
+			}
+		}
 		podev->high_bw_req_count++;
 	} else {
-		if (podev->high_bw_req_count == 1)
-			msm_bus_scale_client_update_request(
+		if (podev->high_bw_req_count == 1) {
+			ret = msm_bus_scale_client_update_request(
 					podev->bus_scale_handle, 0);
+			if (ret) {
+				pr_err("%s Unable to set to low bandwidth\n",
+							__func__);
+				mutex_unlock(&qcedev_sent_bw_req);
+				return;
+			}
+			ret = qce_disable_clk(podev->qce);
+			if (ret) {
+				pr_err("%s Unable disable clk\n", __func__);
+				ret = msm_bus_scale_client_update_request(
+					podev->bus_scale_handle, 1);
+				if (ret)
+					pr_err("%s Unable to set to high bandwidth\n",
+							__func__);
+				mutex_unlock(&qcedev_sent_bw_req);
+				return;
+			}
+		}
 		podev->high_bw_req_count--;
 	}
-	mutex_unlock(&sent_bw_req);
-
-	return ret;
+	mutex_unlock(&qcedev_sent_bw_req);
 }
 
 
@@ -293,10 +325,14 @@ struct qcedev_stat {
 	u32 qcedev_sha_fail;
 };
 
-static struct qcedev_stat _qcedev_stat[MAX_QCE_DEVICE];
+static struct qcedev_stat _qcedev_stat;
+#ifdef CONFIG_DEBUG_FS
 static struct dentry *_debug_dent;
+#endif
 static char _debug_read_buf[DEBUG_MAX_RW_BUF];
-static int _debug_qcedev[MAX_QCE_DEVICE];
+#ifdef CONFIG_DEBUG_FS
+static int _debug_qcedev;
+#endif
 
 static struct qcedev_control *qcedev_minor_to_control(unsigned n)
 {
@@ -331,7 +367,7 @@ static int qcedev_open(struct inode *inode, struct file *file)
 	handle->cntl = podev;
 	file->private_data = handle;
 	if (podev->platform_support.bus_scale_table != NULL)
-		return qcedev_ce_high_bw_req(podev, true);
+		qcedev_ce_high_bw_req(podev, true);
 	return 0;
 }
 
@@ -348,8 +384,8 @@ static int qcedev_release(struct inode *inode, struct file *file)
 	}
 	kzfree(handle);
 	file->private_data = NULL;
-	if (podev->platform_support.bus_scale_table != NULL)
-		return qcedev_ce_high_bw_req(podev, false);
+	if (podev != NULL && podev->platform_support.bus_scale_table != NULL)
+		qcedev_ce_high_bw_req(podev, false);
 	return 0;
 }
 
@@ -450,14 +486,12 @@ static int start_cipher_req(struct qcedev_control *podev)
 
 	/* start the command on the podev->active_command */
 	qcedev_areq = podev->active_command;
-
 	qcedev_areq->cipher_req.cookie = qcedev_areq->handle;
-	creq.use_pmem = qcedev_areq->cipher_op_req.use_pmem;
-	if (qcedev_areq->cipher_op_req.use_pmem == QCEDEV_USE_PMEM)
-		creq.pmem = &qcedev_areq->cipher_op_req.pmem;
-	else
-		creq.pmem = NULL;
-
+	if (qcedev_areq->cipher_op_req.use_pmem == QCEDEV_USE_PMEM) {
+		pr_err("%s: Use of PMEM is not supported\n", __func__);
+		goto unsupported;
+	}
+	creq.pmem = NULL;
 	switch (qcedev_areq->cipher_op_req.alg) {
 	case QCEDEV_ALG_DES:
 		creq.alg = CIPHER_ALG_DES;
@@ -536,7 +570,7 @@ static int start_cipher_req(struct qcedev_control *podev)
 
 	creq.qce_cb = qcedev_cipher_req_cb;
 	creq.areq = (void *)&qcedev_areq->cipher_req;
-
+	creq.flags = 0;
 	ret = qce_ablk_cipher_req(podev->qce, &creq);
 unsupported:
 	if (ret)
@@ -568,6 +602,7 @@ static int start_sha_req(struct qcedev_control *podev)
 		if (podev->ce_support.sha_hmac) {
 			sreq.alg = QCE_HASH_SHA1_HMAC;
 			sreq.authkey = &handle->sha_ctxt.authkey[0];
+			sreq.authklen = QCEDEV_MAX_SHA_BLOCK_SIZE;
 
 		} else {
 			sreq.alg = QCE_HASH_SHA1;
@@ -578,7 +613,7 @@ static int start_sha_req(struct qcedev_control *podev)
 		if (podev->ce_support.sha_hmac) {
 			sreq.alg = QCE_HASH_SHA256_HMAC;
 			sreq.authkey = &handle->sha_ctxt.authkey[0];
-
+			sreq.authklen = QCEDEV_MAX_SHA_BLOCK_SIZE;
 		} else {
 			sreq.alg = QCE_HASH_SHA256;
 			sreq.authkey = NULL;
@@ -590,6 +625,9 @@ static int start_sha_req(struct qcedev_control *podev)
 		sreq.authklen = qcedev_areq->sha_op_req.authklen;
 		break;
 	default:
+		pr_err("Algorithm %d not supported, exiting\n",
+			qcedev_areq->sha_op_req.alg);
+		return -EINVAL;
 		break;
 	};
 
@@ -608,6 +646,7 @@ static int start_sha_req(struct qcedev_control *podev)
 	sreq.size = qcedev_areq->sha_req.sreq.nbytes;
 	sreq.src = qcedev_areq->sha_req.sreq.src;
 	sreq.areq = (void *)&qcedev_areq->sha_req;
+	sreq.flags = 0;
 
 	ret = qce_process_sha_req(podev->qce, &sreq);
 
@@ -661,7 +700,7 @@ static int submit_req(struct qcedev_async_req *qcedev_areq,
 	if (ret)
 		qcedev_areq->err = -EIO;
 
-	pstat = &_qcedev_stat[podev->pdev->id];
+	pstat = &_qcedev_stat;
 	if (qcedev_areq->op_type == QCEDEV_CRYPTO_OPER_CIPHER) {
 		switch (qcedev_areq->cipher_op_req.op) {
 		case QCEDEV_OPER_DEC:
@@ -716,11 +755,11 @@ static int qcedev_sha_init(struct qcedev_async_req *areq,
 
 
 static int qcedev_sha_update_max_xfer(struct qcedev_async_req *qcedev_areq,
-				struct qcedev_handle *handle)
+				struct qcedev_handle *handle,
+				struct scatterlist *sg_src)
 {
 	int err = 0;
 	int i = 0;
-	struct scatterlist sg_src[2];
 	uint32_t total;
 
 	uint8_t *user_src = NULL;
@@ -809,7 +848,7 @@ static int qcedev_sha_update_max_xfer(struct qcedev_async_req *qcedev_areq,
 	sha_pad_len = ALIGN(total, CE_SHA_BLOCK_SIZE) - total;
 	trailing_buf_len =  CE_SHA_BLOCK_SIZE - sha_pad_len;
 
-	qcedev_areq->sha_req.sreq.src = (struct scatterlist *) &sg_src[0];
+	qcedev_areq->sha_req.sreq.src = sg_src;
 	sg_set_buf(qcedev_areq->sha_req.sreq.src, k_align_src,
 						total-trailing_buf_len);
 	sg_mark_end(qcedev_areq->sha_req.sreq.src);
@@ -835,7 +874,8 @@ static int qcedev_sha_update_max_xfer(struct qcedev_async_req *qcedev_areq,
 }
 
 static int qcedev_sha_update(struct qcedev_async_req *qcedev_areq,
-				struct qcedev_handle *handle)
+				struct qcedev_handle *handle,
+				struct scatterlist *sg_src)
 {
 	int err = 0;
 	int i = 0;
@@ -882,7 +922,7 @@ static int qcedev_sha_update(struct qcedev_async_req *qcedev_areq,
 				sreq->entries = 1;
 
 				err = qcedev_sha_update_max_xfer(qcedev_areq,
-									handle);
+								handle, sg_src);
 
 				sreq->data[i].len = req.data[i].len -
 							QCE_MAX_OPER_DATA;
@@ -916,7 +956,7 @@ static int qcedev_sha_update(struct qcedev_async_req *qcedev_areq,
 
 				i = j;
 				err = qcedev_sha_update_max_xfer(qcedev_areq,
-									handle);
+								handle, sg_src);
 				num_entries = 0;
 
 				sreq->data[i].vaddr = req.data[i].vaddr +
@@ -940,7 +980,7 @@ static int qcedev_sha_update(struct qcedev_async_req *qcedev_areq,
 		sreq->data_len = saved_req->data_len;
 		kfree(saved_req);
 	} else
-		err = qcedev_sha_update_max_xfer(qcedev_areq, handle);
+		err = qcedev_sha_update_max_xfer(qcedev_areq, handle, sg_src);
 
 	return err;
 }
@@ -955,7 +995,6 @@ static int qcedev_sha_final(struct qcedev_async_req *qcedev_areq,
 	uint8_t *k_buf_src = NULL;
 	uint8_t *k_align_src = NULL;
 
-	handle->sha_ctxt.first_blk = 0;
 	handle->sha_ctxt.last_blk = 1;
 
 	total = handle->sha_ctxt.trailing_buf_len;
@@ -973,9 +1012,6 @@ static int qcedev_sha_final(struct qcedev_async_req *qcedev_areq,
 							CACHE_LINE_SIZE);
 		memcpy(k_align_src, &handle->sha_ctxt.trailing_buf[0], total);
 	}
-	handle->sha_ctxt.last_blk = 1;
-	handle->sha_ctxt.first_blk = 0;
-
 	qcedev_areq->sha_req.sreq.src = (struct scatterlist *) &sg_src;
 	sg_set_buf(qcedev_areq->sha_req.sreq.src, k_align_src, total);
 	sg_mark_end(qcedev_areq->sha_req.sreq.src);
@@ -996,11 +1032,11 @@ static int qcedev_sha_final(struct qcedev_async_req *qcedev_areq,
 }
 
 static int qcedev_hash_cmac(struct qcedev_async_req *qcedev_areq,
-					struct qcedev_handle *handle)
+					struct qcedev_handle *handle,
+					struct scatterlist *sg_src)
 {
 	int err = 0;
 	int i = 0;
-	struct scatterlist sg_src[2];
 	uint32_t total;
 
 	uint8_t *user_src = NULL;
@@ -1049,7 +1085,7 @@ static int qcedev_hash_cmac(struct qcedev_async_req *qcedev_areq,
 		k_src += qcedev_areq->sha_op_req.data[i].len;
 	}
 
-	qcedev_areq->sha_req.sreq.src = (struct scatterlist *) &sg_src[0];
+	qcedev_areq->sha_req.sreq.src = sg_src;
 	sg_set_buf(qcedev_areq->sha_req.sreq.src, k_buf_src, total);
 	sg_mark_end(qcedev_areq->sha_req.sreq.src);
 
@@ -1062,11 +1098,13 @@ static int qcedev_hash_cmac(struct qcedev_async_req *qcedev_areq,
 }
 
 static int qcedev_set_hmac_auth_key(struct qcedev_async_req *areq,
-					struct qcedev_handle *handle)
+					struct qcedev_handle *handle,
+					struct scatterlist *sg_src)
 {
 	int err = 0;
 
 	if (areq->sha_op_req.authklen <= QCEDEV_MAX_KEY_SIZE) {
+		qcedev_sha_init(areq, handle);
 		/* Verify Source Address */
 		if (!access_ok(VERIFY_READ,
 				(void __user *)areq->sha_op_req.authkey,
@@ -1078,6 +1116,7 @@ static int qcedev_set_hmac_auth_key(struct qcedev_async_req *areq,
 			return -EFAULT;
 	} else {
 		struct qcedev_async_req authkey_areq;
+		uint8_t	authkey[QCEDEV_MAX_SHA_BLOCK_SIZE];
 
 		init_completion(&authkey_areq.complete);
 
@@ -1087,6 +1126,8 @@ static int qcedev_set_hmac_auth_key(struct qcedev_async_req *areq,
 		authkey_areq.sha_op_req.data[0].len = areq->sha_op_req.authklen;
 		authkey_areq.sha_op_req.data_len = areq->sha_op_req.authklen;
 		authkey_areq.sha_op_req.diglen = 0;
+		authkey_areq.handle = handle;
+
 		memset(&authkey_areq.sha_op_req.digest[0], 0,
 						QCEDEV_MAX_SHA_DIGEST);
 		if (areq->sha_op_req.alg == QCEDEV_ALG_SHA1_HMAC)
@@ -1097,13 +1138,16 @@ static int qcedev_set_hmac_auth_key(struct qcedev_async_req *areq,
 		authkey_areq.op_type = QCEDEV_CRYPTO_OPER_SHA;
 
 		qcedev_sha_init(&authkey_areq, handle);
-		err = qcedev_sha_update(&authkey_areq, handle);
+		err = qcedev_sha_update(&authkey_areq, handle, sg_src);
 		if (!err)
 			err = qcedev_sha_final(&authkey_areq, handle);
 		else
 			return err;
-		memcpy(&handle->sha_ctxt.authkey[0],
-				&handle->sha_ctxt.digest[0],
+		memcpy(&authkey[0], &handle->sha_ctxt.digest[0],
+				handle->sha_ctxt.diglen);
+		qcedev_sha_init(areq, handle);
+
+		memcpy(&handle->sha_ctxt.authkey[0], &authkey[0],
 				handle->sha_ctxt.diglen);
 	}
 	return err;
@@ -1200,13 +1244,13 @@ static int qcedev_hmac_update_iokey(struct qcedev_async_req *areq,
 }
 
 static int qcedev_hmac_init(struct qcedev_async_req *areq,
-				struct qcedev_handle *handle)
+				struct qcedev_handle *handle,
+				struct scatterlist *sg_src)
 {
 	int err;
 	struct qcedev_control *podev = handle->cntl;
 
-	qcedev_sha_init(areq, handle);
-	err = qcedev_set_hmac_auth_key(areq, handle);
+	err = qcedev_set_hmac_auth_key(areq, handle, sg_src);
 	if (err)
 		return err;
 	if (!podev->ce_support.sha_hmac)
@@ -1234,19 +1278,21 @@ static int qcedev_hmac_final(struct qcedev_async_req *areq,
 }
 
 static int qcedev_hash_init(struct qcedev_async_req *areq,
-				struct qcedev_handle *handle)
+				struct qcedev_handle *handle,
+				struct scatterlist *sg_src)
 {
 	if ((areq->sha_op_req.alg == QCEDEV_ALG_SHA1) ||
 			(areq->sha_op_req.alg == QCEDEV_ALG_SHA256))
 		return qcedev_sha_init(areq, handle);
 	else
-		return qcedev_hmac_init(areq, handle);
+		return qcedev_hmac_init(areq, handle, sg_src);
 }
 
 static int qcedev_hash_update(struct qcedev_async_req *qcedev_areq,
-				struct qcedev_handle *handle)
+				struct qcedev_handle *handle,
+				struct scatterlist *sg_src)
 {
-	return qcedev_sha_update(qcedev_areq, handle);
+	return qcedev_sha_update(qcedev_areq, handle, sg_src);
 }
 
 static int qcedev_hash_final(struct qcedev_async_req *areq,
@@ -1258,224 +1304,6 @@ static int qcedev_hash_final(struct qcedev_async_req *areq,
 	else
 		return qcedev_hmac_final(areq, handle);
 }
-
-#ifdef CONFIG_ANDROID_PMEM
-static int qcedev_pmem_ablk_cipher_max_xfer(struct qcedev_async_req *areq,
-						struct qcedev_handle *handle)
-{
-	int i = 0;
-	int err = 0;
-	struct scatterlist *sg_src = NULL;
-	struct scatterlist *sg_dst = NULL;
-	struct scatterlist *sg_ndex = NULL;
-	struct file *file_src = NULL;
-	struct file *file_dst = NULL;
-	unsigned long paddr;
-	unsigned long kvaddr;
-	unsigned long len;
-
-	sg_src = kmalloc((sizeof(struct scatterlist) *
-				areq->cipher_op_req.entries),	GFP_KERNEL);
-	if (sg_src == NULL) {
-		pr_err("%s: Can't Allocate memory:sg_src 0x%x\n",
-			__func__, (uint32_t)sg_src);
-		return -ENOMEM;
-
-	}
-	memset(sg_src, 0, (sizeof(struct scatterlist) *
-				areq->cipher_op_req.entries));
-	sg_ndex = sg_src;
-	areq->cipher_req.creq.src = sg_src;
-
-	/* address src */
-	get_pmem_file(areq->cipher_op_req.pmem.fd_src, &paddr,
-					&kvaddr, &len, &file_src);
-
-	for (i = 0; i < areq->cipher_op_req.entries; i++) {
-		sg_set_buf(sg_ndex,
-		((uint8_t *)(areq->cipher_op_req.pmem.src[i].offset) + kvaddr),
-		areq->cipher_op_req.pmem.src[i].len);
-		sg_ndex++;
-	}
-	sg_mark_end(--sg_ndex);
-
-	for (i = 0; i < areq->cipher_op_req.entries; i++)
-		areq->cipher_op_req.pmem.src[i].offset += (uint32_t)paddr;
-
-	/* address dst */
-	/* If not place encryption/decryption */
-	if (areq->cipher_op_req.in_place_op != 1) {
-		sg_dst = kmalloc((sizeof(struct scatterlist) *
-				areq->cipher_op_req.entries), GFP_KERNEL);
-		if (sg_dst == NULL) {
-			pr_err("%s: Can't Allocate memory: sg_dst 0x%x\n",
-			__func__, (uint32_t)sg_dst);
-			return -ENOMEM;
-		}
-		memset(sg_dst, 0, (sizeof(struct scatterlist) *
-					areq->cipher_op_req.entries));
-		areq->cipher_req.creq.dst = sg_dst;
-		sg_ndex = sg_dst;
-
-		get_pmem_file(areq->cipher_op_req.pmem.fd_dst, &paddr,
-					&kvaddr, &len, &file_dst);
-		for (i = 0; i < areq->cipher_op_req.entries; i++)
-			sg_set_buf(sg_ndex++,
-			((uint8_t *)(areq->cipher_op_req.pmem.dst[i].offset)
-			+ kvaddr), areq->cipher_op_req.pmem.dst[i].len);
-		sg_mark_end(--sg_ndex);
-
-		for (i = 0; i < areq->cipher_op_req.entries; i++)
-			areq->cipher_op_req.pmem.dst[i].offset +=
-							(uint32_t)paddr;
-	} else {
-		areq->cipher_req.creq.dst = sg_src;
-		for (i = 0; i < areq->cipher_op_req.entries; i++) {
-			areq->cipher_op_req.pmem.dst[i].offset =
-				areq->cipher_op_req.pmem.src[i].offset;
-			areq->cipher_op_req.pmem.dst[i].len =
-				areq->cipher_op_req.pmem.src[i].len;
-		}
-	}
-
-	areq->cipher_req.creq.nbytes = areq->cipher_op_req.data_len;
-	areq->cipher_req.creq.info = areq->cipher_op_req.iv;
-
-	err = submit_req(areq, handle);
-
-	kfree(sg_src);
-	kfree(sg_dst);
-
-	if (file_dst)
-		put_pmem_file(file_dst);
-	if (file_src)
-		put_pmem_file(file_src);
-
-	return err;
-};
-
-
-static int qcedev_pmem_ablk_cipher(struct qcedev_async_req *qcedev_areq,
-						struct qcedev_handle *handle)
-{
-	int err = 0;
-	int i = 0;
-	int j = 0;
-	int k = 0;
-	int num_entries = 0;
-	uint32_t total = 0;
-	struct qcedev_cipher_op_req *saved_req;
-	struct qcedev_cipher_op_req *creq = &qcedev_areq->cipher_op_req;
-
-	saved_req = kmalloc(sizeof(struct qcedev_cipher_op_req), GFP_KERNEL);
-	if (saved_req == NULL) {
-		pr_err(KERN_ERR "%s:Can't Allocate mem:saved_req 0x%x\n",
-		__func__, (uint32_t)saved_req);
-		return -ENOMEM;
-	}
-	memcpy(saved_req, creq, sizeof(struct qcedev_cipher_op_req));
-
-	if (qcedev_areq->cipher_op_req.data_len > QCE_MAX_OPER_DATA) {
-
-		struct qcedev_cipher_op_req req;
-
-		/* save the original req structure */
-		memcpy(&req, creq, sizeof(struct qcedev_cipher_op_req));
-
-		i = 0;
-		/* Address 32 KB  at a time */
-		while ((i < req.entries) && (err == 0)) {
-			if (creq->pmem.src[i].len > QCE_MAX_OPER_DATA) {
-				creq->pmem.src[0].len =	QCE_MAX_OPER_DATA;
-				if (i > 0) {
-					creq->pmem.src[0].offset =
-						creq->pmem.src[i].offset;
-				}
-
-				creq->data_len = QCE_MAX_OPER_DATA;
-				creq->entries = 1;
-
-				err =
-				qcedev_pmem_ablk_cipher_max_xfer(qcedev_areq,
-								handle);
-
-				creq->pmem.src[i].len =	req.pmem.src[i].len -
-							QCE_MAX_OPER_DATA;
-				creq->pmem.src[i].offset =
-						req.pmem.src[i].offset +
-						QCE_MAX_OPER_DATA;
-				req.pmem.src[i].offset =
-						creq->pmem.src[i].offset;
-				req.pmem.src[i].len = creq->pmem.src[i].len;
-			} else {
-				total = 0;
-				for (j = i; j < req.entries; j++) {
-					num_entries++;
-					if ((total + creq->pmem.src[j].len)
-							>= QCE_MAX_OPER_DATA) {
-						creq->pmem.src[j].len =
-						QCE_MAX_OPER_DATA - total;
-						total = QCE_MAX_OPER_DATA;
-						break;
-					}
-					total += creq->pmem.src[j].len;
-				}
-
-				creq->data_len = total;
-				if (i > 0)
-					for (k = 0; k < num_entries; k++) {
-						creq->pmem.src[k].len =
-						creq->pmem.src[i+k].len;
-						creq->pmem.src[k].offset =
-						creq->pmem.src[i+k].offset;
-					}
-				creq->entries =  num_entries;
-
-				i = j;
-				err =
-				qcedev_pmem_ablk_cipher_max_xfer(qcedev_areq,
-								handle);
-				num_entries = 0;
-
-					creq->pmem.src[i].offset =
-						req.pmem.src[i].offset +
-						creq->pmem.src[i].len;
-					creq->pmem.src[i].len =
-						req.pmem.src[i].len -
-						creq->pmem.src[i].len;
-					req.pmem.src[i].offset =
-						creq->pmem.src[i].offset;
-					req.pmem.src[i].len =
-						creq->pmem.src[i].len;
-
-				if (creq->pmem.src[i].len == 0)
-					i++;
-			}
-
-		} /* end of while ((i < req.entries) && (err == 0)) */
-
-	} else
-		err = qcedev_pmem_ablk_cipher_max_xfer(qcedev_areq, handle);
-
-	/* Restore the original req structure */
-	for (i = 0; i < saved_req->entries; i++) {
-		creq->pmem.src[i].len = saved_req->pmem.src[i].len;
-		creq->pmem.src[i].offset = saved_req->pmem.src[i].offset;
-	}
-	creq->entries = saved_req->entries;
-	creq->data_len = saved_req->data_len;
-	kfree(saved_req);
-
-	return err;
-
-}
-#else
-static int qcedev_pmem_ablk_cipher(struct qcedev_async_req *qcedev_areq,
-						struct qcedev_handle *handle)
-{
-	return -EPERM;
-}
-#endif/*CONFIG_ANDROID_PMEM*/
 
 static int qcedev_vbuf_ablk_cipher_max_xfer(struct qcedev_async_req *areq,
 				int *di, struct qcedev_handle *handle,
@@ -1735,67 +1563,118 @@ static int qcedev_vbuf_ablk_cipher(struct qcedev_async_req *areq,
 
 }
 
-static int qcedev_check_cipher_params(struct qcedev_cipher_op_req *req,
+static int qcedev_check_cipher_key(struct qcedev_cipher_op_req *req,
 						struct qcedev_control *podev)
 {
-	if ((req->entries == 0) || (req->data_len == 0))
-		goto error;
-	if ((req->alg >= QCEDEV_ALG_LAST) ||
-		(req->mode >= QCEDEV_AES_DES_MODE_LAST))
-		goto error;
-	if (req->alg == QCEDEV_ALG_AES) {
-		if ((req->mode == QCEDEV_AES_MODE_XTS) &&
-					(!podev->ce_support.aes_xts))
-			goto error;
-		/* if intending to use HW key make sure key fields are set
-		 * correctly and HW key is indeed supported in target
-		 */
-		if (req->encklen == 0) {
-			int i;
-			for (i = 0; i < QCEDEV_MAX_KEY_SIZE; i++)
-				if (req->enckey[i])
-					goto error;
-			if ((req->op != QCEDEV_OPER_ENC_NO_KEY) &&
-				(req->op != QCEDEV_OPER_DEC_NO_KEY))
-				if (!podev->platform_support.hw_key_support)
-					goto error;
+
+	if (req->encklen < 0) {
+		pr_err("%s: Invalid key size: %d\n", __func__, req->encklen);
+		return -EINVAL;
+	}
+	/* if intending to use HW key make sure key fields are set
+	 * correctly and HW key is indeed supported in target
+	 */
+	if (req->encklen == 0) {
+		int i;
+		for (i = 0; i < QCEDEV_MAX_KEY_SIZE; i++) {
+			if (req->enckey[i]) {
+				pr_err("%s: Invalid key: non-zero key input\n",
+								__func__);
+				goto error;
+			}
+		}
+		if ((req->op != QCEDEV_OPER_ENC_NO_KEY) &&
+			(req->op != QCEDEV_OPER_DEC_NO_KEY))
+			if (!podev->platform_support.hw_key_support) {
+				pr_err("%s: Invalid op %d\n", __func__,
+						(uint32_t)req->op);
+				goto error;
+			}
+	} else {
+		if (req->encklen == QCEDEV_AES_KEY_192) {
+			if (!podev->ce_support.aes_key_192) {
+				pr_err("%s: AES-192 not supported\n", __func__);
+				goto error;
+			}
 		} else {
-			if (req->encklen == QCEDEV_AES_KEY_192) {
-				if (!podev->ce_support.aes_key_192)
+			/* if not using HW key make sure key
+			 * length is valid
+			 */
+			if ((req->mode == QCEDEV_AES_MODE_XTS)) {
+				if ((req->encklen != QCEDEV_AES_KEY_128*2) &&
+				(req->encklen != QCEDEV_AES_KEY_256*2)) {
+					pr_err("%s: unsupported key size: %d\n",
+							__func__, req->encklen);
 					goto error;
+				}
 			} else {
-				/* if not using HW key make sure key
-				 * length is valid
-				 */
-				if (!((req->encklen == QCEDEV_AES_KEY_128) ||
-					(req->encklen == QCEDEV_AES_KEY_256)))
+				if ((req->encklen != QCEDEV_AES_KEY_128) &&
+					(req->encklen != QCEDEV_AES_KEY_256)) {
+					pr_err("%s: unsupported key size %d\n",
+							__func__, req->encklen);
 					goto error;
+				}
 			}
 		}
 	}
+	return 0;
+error:
+	return -EINVAL;
+}
+
+static int qcedev_check_cipher_params(struct qcedev_cipher_op_req *req,
+						struct qcedev_control *podev)
+{
+	if (req->use_pmem) {
+		pr_err("%s: Use of PMEM is not supported\n", __func__);
+		goto error;
+	}
+	if ((req->entries == 0) || (req->data_len == 0) ||
+			(req->entries > QCEDEV_MAX_BUFFERS)) {
+		pr_err("%s: Invalid cipher length/entries\n", __func__);
+		goto error;
+	}
+	if ((req->alg >= QCEDEV_ALG_LAST) ||
+		(req->mode >= QCEDEV_AES_DES_MODE_LAST)) {
+		pr_err("%s: Invalid algorithm %d\n", __func__,
+						(uint32_t)req->alg);
+		goto error;
+	}
+	if ((req->mode == QCEDEV_AES_MODE_XTS) &&
+				(!podev->ce_support.aes_xts)) {
+		pr_err("%s: XTS algorithm is not supported\n", __func__);
+		goto error;
+	}
+	if (req->alg == QCEDEV_ALG_AES) {
+		if (qcedev_check_cipher_key(req, podev))
+			goto error;
+
+	}
 	/* if using a byteoffset, make sure it is CTR mode using vbuf */
 	if (req->byteoffset) {
-		if (req->mode != QCEDEV_AES_MODE_CTR)
+		if (req->mode != QCEDEV_AES_MODE_CTR) {
+			pr_err("%s: Operation on byte offset not supported\n",
+								 __func__);
 			goto error;
-		else { /* if using CTR mode make sure not using Pmem */
-			if (req->use_pmem)
-				goto error;
+		}
+		if (req->byteoffset >= AES_CE_BLOCK_SIZE) {
+			pr_err("%s: Invalid byte offset\n", __func__);
+			goto error;
 		}
 	}
-	/* if using PMEM with non-zero byteoffset, ensure it is in_place_op */
-	if (req->use_pmem) {
-		if (!req->in_place_op)
-			goto error;
-	}
 	/* Ensure zer ivlen for ECB  mode  */
-	if (req->ivlen != 0) {
+	if (req->ivlen > 0) {
 		if ((req->mode == QCEDEV_AES_MODE_ECB) ||
-				(req->mode == QCEDEV_DES_MODE_ECB))
+				(req->mode == QCEDEV_DES_MODE_ECB)) {
+			pr_err("%s: Expecting a zero length IV\n", __func__);
 			goto error;
+		}
 	} else {
 		if ((req->mode != QCEDEV_AES_MODE_ECB) &&
-				(req->mode != QCEDEV_DES_MODE_ECB))
+				(req->mode != QCEDEV_DES_MODE_ECB)) {
+			pr_err("%s: Expecting a non-zero ength IV\n", __func__);
 			goto error;
+		}
 	}
 
 	return 0;
@@ -1808,14 +1687,41 @@ static int qcedev_check_sha_params(struct qcedev_sha_op_req *req,
 						struct qcedev_control *podev)
 {
 	if ((req->alg == QCEDEV_ALG_AES_CMAC) &&
-				(!podev->ce_support.cmac))
+				(!podev->ce_support.cmac)) {
+		pr_err("%s: CMAC not supported\n", __func__);
 		goto sha_error;
+	}
+	if ((req->entries == 0) || (req->data_len == 0) ||
+			(req->entries > QCEDEV_MAX_BUFFERS)) {
+		pr_err("%s: Invalid data length (%d)/ num entries (%d)\n",
+				__func__, req->data_len, req->entries);
+		goto sha_error;
+	}
 
-	if ((req->entries == 0) || (req->data_len == 0))
+	if (req->alg >= QCEDEV_ALG_SHA_ALG_LAST) {
+		pr_err("%s: Invalid algorithm (%d)\n", __func__, req->alg);
 		goto sha_error;
+	}
+	if ((req->alg == QCEDEV_ALG_SHA1_HMAC) ||
+			(req->alg == QCEDEV_ALG_SHA1_HMAC)) {
+		if (req->authkey == NULL) {
+			pr_err("%s: Invalid authkey pointer\n", __func__);
+			goto sha_error;
+		}
+		if (req->authklen <= 0) {
+			pr_err("%s: Invalid authkey length (%d)\n",
+						__func__, req->authklen);
+			goto sha_error;
+		}
+	}
 
-	if (req->alg >= QCEDEV_ALG_SHA_ALG_LAST)
-		goto sha_error;
+	if (req->alg == QCEDEV_ALG_AES_CMAC) {
+		if ((req->authklen != QCEDEV_AES_KEY_128) &&
+					(req->authklen != QCEDEV_AES_KEY_256)) {
+			pr_err("%s: unsupported key length\n", __func__);
+			goto sha_error;
+		}
+	}
 
 	return 0;
 sha_error:
@@ -1844,7 +1750,7 @@ static long qcedev_ioctl(struct file *file, unsigned cmd, unsigned long arg)
 		return -ENOTTY;
 
 	init_completion(&qcedev_areq.complete);
-	pstat = &_qcedev_stat[podev->pdev->id];
+	pstat = &_qcedev_stat;
 
 	switch (cmd) {
 	case QCEDEV_IOCTL_LOCK_CE:
@@ -1875,10 +1781,7 @@ static long qcedev_ioctl(struct file *file, unsigned cmd, unsigned long arg)
 				podev))
 			return -EINVAL;
 
-		if (qcedev_areq.cipher_op_req.use_pmem)
-			err = qcedev_pmem_ablk_cipher(&qcedev_areq, handle);
-		else
-			err = qcedev_vbuf_ablk_cipher(&qcedev_areq, handle);
+		err = qcedev_vbuf_ablk_cipher(&qcedev_areq, handle);
 		if (err)
 			return err;
 		if (__copy_to_user((void __user *)arg,
@@ -1888,7 +1791,8 @@ static long qcedev_ioctl(struct file *file, unsigned cmd, unsigned long arg)
 		break;
 
 	case QCEDEV_IOCTL_SHA_INIT_REQ:
-
+		{
+		struct scatterlist sg_src;
 		if (!access_ok(VERIFY_WRITE, (void __user *)arg,
 				sizeof(struct qcedev_sha_op_req)))
 			return -EFAULT;
@@ -1900,17 +1804,20 @@ static long qcedev_ioctl(struct file *file, unsigned cmd, unsigned long arg)
 		if (qcedev_check_sha_params(&qcedev_areq.sha_op_req, podev))
 			return -EINVAL;
 		qcedev_areq.op_type = QCEDEV_CRYPTO_OPER_SHA;
-		err = qcedev_hash_init(&qcedev_areq, handle);
+		err = qcedev_hash_init(&qcedev_areq, handle, &sg_src);
 		if (err)
 			return err;
 		if (__copy_to_user((void __user *)arg, &qcedev_areq.sha_op_req,
 					sizeof(struct qcedev_sha_op_req)))
 				return -EFAULT;
+		}
 		break;
 	case QCEDEV_IOCTL_GET_CMAC_REQ:
 		if (!podev->ce_support.cmac)
 			return -ENOTTY;
 	case QCEDEV_IOCTL_SHA_UPDATE_REQ:
+		{
+		struct scatterlist sg_src;
 		if (!access_ok(VERIFY_WRITE, (void __user *)arg,
 				sizeof(struct qcedev_sha_op_req)))
 			return -EFAULT;
@@ -1924,11 +1831,11 @@ static long qcedev_ioctl(struct file *file, unsigned cmd, unsigned long arg)
 		qcedev_areq.op_type = QCEDEV_CRYPTO_OPER_SHA;
 
 		if (qcedev_areq.sha_op_req.alg == QCEDEV_ALG_AES_CMAC) {
-			err = qcedev_hash_cmac(&qcedev_areq, handle);
+			err = qcedev_hash_cmac(&qcedev_areq, handle, &sg_src);
 			if (err)
 				return err;
 		} else {
-			err = qcedev_hash_update(&qcedev_areq, handle);
+			err = qcedev_hash_update(&qcedev_areq, handle, &sg_src);
 			if (err)
 				return err;
 		}
@@ -1939,6 +1846,7 @@ static long qcedev_ioctl(struct file *file, unsigned cmd, unsigned long arg)
 		if (__copy_to_user((void __user *)arg, &qcedev_areq.sha_op_req,
 					sizeof(struct qcedev_sha_op_req)))
 			return -EFAULT;
+		}
 		break;
 
 	case QCEDEV_IOCTL_SHA_FINAL_REQ:
@@ -1967,7 +1875,8 @@ static long qcedev_ioctl(struct file *file, unsigned cmd, unsigned long arg)
 		break;
 
 	case QCEDEV_IOCTL_GET_SHA_REQ:
-
+		{
+		struct scatterlist sg_src;
 		if (!access_ok(VERIFY_WRITE, (void __user *)arg,
 				sizeof(struct qcedev_sha_op_req)))
 			return -EFAULT;
@@ -1979,8 +1888,8 @@ static long qcedev_ioctl(struct file *file, unsigned cmd, unsigned long arg)
 		if (qcedev_check_sha_params(&qcedev_areq.sha_op_req, podev))
 			return -EINVAL;
 		qcedev_areq.op_type = QCEDEV_CRYPTO_OPER_SHA;
-		qcedev_hash_init(&qcedev_areq, handle);
-		err = qcedev_hash_update(&qcedev_areq, handle);
+		qcedev_hash_init(&qcedev_areq, handle, &sg_src);
+		err = qcedev_hash_update(&qcedev_areq, handle, &sg_src);
 		if (err)
 			return err;
 		err = qcedev_hash_final(&qcedev_areq, handle);
@@ -1993,6 +1902,7 @@ static long qcedev_ioctl(struct file *file, unsigned cmd, unsigned long arg)
 		if (__copy_to_user((void __user *)arg, &qcedev_areq.sha_op_req,
 					sizeof(struct qcedev_sha_op_req)))
 			return -EFAULT;
+		}
 		break;
 
 	default:
@@ -2009,21 +1919,10 @@ static int qcedev_probe(struct platform_device *pdev)
 	struct qcedev_control *podev;
 	struct msm_ce_hw_support *platform_support;
 
-	if (pdev->id >= MAX_QCE_DEVICE) {
-		pr_err("%s: device id %d  exceeds allowed %d\n",
-			__func__, pdev->id, MAX_QCE_DEVICE);
-		return -ENOENT;
-	}
-	podev = &qce_dev[pdev->id];
-
+	podev = &qce_dev[0];
+	
 	platform_support = (struct msm_ce_hw_support *)pdev->dev.platform_data;
-	podev->platform_support.ce_shared = platform_support->ce_shared;
-	podev->platform_support.shared_ce_resource =
-				platform_support->shared_ce_resource;
-	podev->platform_support.hw_key_support =
-				platform_support->hw_key_support;
-	podev->platform_support.bus_scale_table =
-				platform_support->bus_scale_table;
+
 	podev->ce_lock_count = 0;
 	podev->high_bw_req_count = 0;
 	INIT_LIST_HEAD(&podev->ready_commands);
@@ -2043,22 +1942,46 @@ static int qcedev_probe(struct platform_device *pdev)
 	podev->qce = handle;
 	podev->pdev = pdev;
 	platform_set_drvdata(pdev, podev);
-	qce_hw_support(podev->qce, &podev->ce_support);
 
+	rc = misc_register(&podev->miscdevice);
+	qce_hw_support(podev->qce, &podev->ce_support);
+	if (podev->ce_support.bam) {
+		podev->platform_support.ce_shared = 0;
+		podev->platform_support.shared_ce_resource = 0;
+		podev->platform_support.hw_key_support = 0;
+		podev->platform_support.bus_scale_table = NULL;
+		podev->platform_support.sha_hmac = 1;
+
+		if (podev->ce_support.is_shared == false) {
+			podev->platform_support.bus_scale_table =
+				platform_support->bus_scale_table;
+			if (!podev->platform_support.bus_scale_table)
+				pr_err("bus_scale_table is NULL\n");
+		}
+	} else {
+		platform_support =
+			(struct msm_ce_hw_support *)pdev->dev.platform_data;
+		podev->platform_support.ce_shared = platform_support->ce_shared;
+		podev->platform_support.shared_ce_resource =
+				platform_support->shared_ce_resource;
+		podev->platform_support.hw_key_support =
+				platform_support->hw_key_support;
+		podev->platform_support.bus_scale_table =
+				platform_support->bus_scale_table;
+		podev->platform_support.sha_hmac = platform_support->sha_hmac;
+	}
 	if (podev->platform_support.bus_scale_table != NULL) {
 		podev->bus_scale_handle =
 			msm_bus_scale_register_client(
 				(struct msm_bus_scale_pdata *)
 				podev->platform_support.bus_scale_table);
 		if (!podev->bus_scale_handle) {
-			printk(KERN_ERR "%s not able to get bus scale\n",
-								__func__);
+			pr_err("%s not able to get bus scale\n",
+				__func__);
 			rc =  -ENOMEM;
 			goto err;
 		}
 	}
-	rc = misc_register(&podev->miscdevice);
-
 	if (rc >= 0)
 		return 0;
 	else
@@ -2094,12 +2017,19 @@ static int qcedev_remove(struct platform_device *pdev)
 	return 0;
 };
 
+static struct of_device_id qcedev_match[] = {
+	{	.compatible = "qcom,qcedev",
+	},
+	{}
+};
+
 static struct platform_driver qcedev_plat_driver = {
 	.probe = qcedev_probe,
 	.remove = qcedev_remove,
 	.driver = {
 		.name = "qce",
 		.owner = THIS_MODULE,
+		.of_match_table = qcedev_match,
 	},
 };
 
@@ -2108,7 +2038,7 @@ static int _disp_stats(int id)
 	struct qcedev_stat *pstat;
 	int len = 0;
 
-	pstat = &_qcedev_stat[id];
+	pstat = &_qcedev_stat;
 	len = snprintf(_debug_read_buf, DEBUG_MAX_RW_BUF - 1,
 			"\nQualcomm QCE dev driver %d Statistics:\n",
 				id + 1);
@@ -2154,10 +2084,7 @@ static ssize_t _debug_stats_read(struct file *file, char __user *buf,
 static ssize_t _debug_stats_write(struct file *file, const char __user *buf,
 			size_t count, loff_t *ppos)
 {
-
-	int qcedev = *((int *) file->private_data);
-
-	memset((char *)&_qcedev_stat[qcedev], 0, sizeof(struct qcedev_stat));
+	memset((char *)&_qcedev_stat, 0, sizeof(struct qcedev_stat));
 	return count;
 };
 
@@ -2167,11 +2094,11 @@ static const struct file_operations _debug_stats_ops = {
 	.write =        _debug_stats_write,
 };
 
+#ifdef CONFIG_DEBUG_FS
 static int _qcedev_debug_init(void)
 {
 	int rc;
 	char name[DEBUG_MAX_FNAME];
-	int i;
 	struct dentry *dent;
 
 	_debug_dent = debugfs_create_dir("qcedev", NULL);
@@ -2181,44 +2108,45 @@ static int _qcedev_debug_init(void)
 		return PTR_ERR(_debug_dent);
 	}
 
-	for (i = 0; i < MAX_QCE_DEVICE; i++) {
-		snprintf(name, DEBUG_MAX_FNAME-1, "stats-%d", i+1);
-		_debug_qcedev[i] = i;
-		dent = debugfs_create_file(name, 0644, _debug_dent,
-				&_debug_qcedev[i], &_debug_stats_ops);
-		if (dent == NULL) {
-			pr_err("qcedev debugfs_create_file fail, error %ld\n",
-					PTR_ERR(dent));
-			rc = PTR_ERR(dent);
-			goto err;
-		}
+	snprintf(name, DEBUG_MAX_FNAME-1, "stats-%d", 1);
+	_debug_qcedev = 0;
+	dent = debugfs_create_file(name, 0644, _debug_dent,
+			&_debug_qcedev, &_debug_stats_ops);
+	if (dent == NULL) {
+		pr_err("qcedev debugfs_create_file fail, error %ld\n",
+				PTR_ERR(dent));
+		rc = PTR_ERR(dent);
+		goto err;
 	}
 	return 0;
 err:
 	debugfs_remove_recursive(_debug_dent);
 	return rc;
 }
+#endif
 
 static int qcedev_init(void)
 {
+#ifdef CONFIG_DEBUG_FS
 	int rc;
 
 	rc = _qcedev_debug_init();
 	if (rc)
 		return rc;
+#endif
 	return platform_driver_register(&qcedev_plat_driver);
 }
 
 static void qcedev_exit(void)
 {
+#ifdef CONFIG_DEBUG_FS
 	debugfs_remove_recursive(_debug_dent);
+#endif
 	platform_driver_unregister(&qcedev_plat_driver);
 }
 
 MODULE_LICENSE("GPL v2");
-MODULE_AUTHOR("Mona Hossain <mhossain@codeaurora.org>");
 MODULE_DESCRIPTION("Qualcomm DEV Crypto driver");
-MODULE_VERSION("1.25");
 
 module_init(qcedev_init);
 module_exit(qcedev_exit);

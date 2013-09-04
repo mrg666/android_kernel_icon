@@ -1,4 +1,4 @@
-/* Copyright (c) 2011, Code Aurora Forum. All rights reserved.
+/* Copyright (c) 2011, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -22,3 +22,4 @@ struct msm_ce_hw_support {
 };
 
 #endif /* __QCOM_CRYPTO_DEVICE__H */
+
