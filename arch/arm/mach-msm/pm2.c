@@ -1714,7 +1714,9 @@ static int msm_pm_enter(suspend_state_t state)
 
 static int msm_pm_prepare_late(void)
 {
+#ifdef CONFIG_DEBUG_FS
 	regulator_showall_enabled();
+#endif
 	return 0;
 }
 static struct platform_suspend_ops msm_pm_ops = {

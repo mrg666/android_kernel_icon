@@ -309,6 +309,7 @@ struct test_context {
 };
 
 /* FORWARD DECLARATIONS */
+#ifdef CONFIG_DEBUG_FS
 static int set_params_loopback_9k(struct test_channel *tch);
 static int set_params_smem_test(struct test_channel *tch);
 static int set_params_a2_validation(struct test_channel *tch);
@@ -326,6 +327,7 @@ static int set_params_modem_reset(struct test_channel *tch);
 static int test_start(void);
 static void rx_cleanup(struct test_channel *test_ch, int *rx_packet_count);
 static void sdio_al_test_cleanup_channels(void);
+#endif
 static void notify(void *priv, unsigned channel_event);
 #ifdef CONFIG_MSM_SDIO_SMEM
 static int sdio_smem_open(struct sdio_smem_client *sdio_smem);
@@ -357,8 +359,9 @@ static void sdio_al_test_initial_dev_and_chan(struct test_context *test_ctx)
 			continue;
 		tch->is_used = 0;
 	}
-
+#ifdef CONFIG_DEBUG_FS
 	sdio_al_test_cleanup_channels();
+#endif
 }
 
 #ifdef CONFIG_DEBUG_FS
@@ -2919,6 +2922,7 @@ static void check_test_completion(void)
 	wake_up(&test_ctx->wait_q);
 }
 
+#ifdef CONFIG_DEBUG_FS
 static int pseudo_random_seed(unsigned int *seed_number)
 {
 	if (!seed_number)
@@ -2928,6 +2932,7 @@ static int pseudo_random_seed(unsigned int *seed_number)
 				(unsigned long)1103515367) + 35757);
 	return (int)((*seed_number / (64*1024)) % 500);
 }
+#endif
 
 /* this function must be locked before accessing it */
 static void lpm_test_update_entry(struct test_channel *tch,
@@ -5376,6 +5381,7 @@ static struct platform_driver sdio_smem_client_drv = {
 };
 #endif
 
+#ifdef CONFIG_DEBUG_FS
 static void sdio_test_lpm_timeout_handler(unsigned long data)
 {
 	struct test_channel *tch = (struct test_channel *)data;
@@ -5430,6 +5436,7 @@ static void sdio_test_lpm_timer_handler(unsigned long data)
 		wake_up(&tch->wait_q);
 	}
 }
+#endif
 
 int sdio_test_wakeup_callback(void *device_handle, int is_vote_for_sleep)
 {
@@ -5576,6 +5583,7 @@ static int sdio_test_find_dev(struct test_channel *tch)
 	return 0;
 }
 
+#ifdef CONFIG_DEBUG_FS
 static void check_test_result(void)
 {
 	int result = 1;
@@ -5621,6 +5629,7 @@ static void check_test_result(void)
 	       __func__, test_ctx->test_result);
 	return;
 }
+
 
 /**
  * Test Main
@@ -5798,6 +5807,7 @@ static int set_params_loopback_9k(struct test_channel *tch)
 
 	return 0;
 }
+
 static int set_params_loopback_9k_close(struct test_channel *tch)
 {
 	if (!tch) {
@@ -6105,6 +6115,7 @@ static int close_channel_lpm_test(int channel_num)
 
 	return ret;
 }
+#endif
 
 /**
  * Write File.
@@ -6455,7 +6466,7 @@ cdev_add_err:
 cdev_alloc_err:
 	device_destroy(test_class, test_ctx->dev_num);
 device_create_err:
-	unregister_chrdev_region(&test_ctx->dev_num, 1);
+	unregister_chrdev_region(test_ctx->dev_num, 1);
 chrdev_region_err:
 	kfree(test_ctx);
 	return ret;

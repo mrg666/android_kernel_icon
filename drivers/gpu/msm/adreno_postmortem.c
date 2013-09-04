@@ -19,7 +19,9 @@
 #include "adreno_pm4types.h"
 #include "adreno_ringbuffer.h"
 #include "adreno_postmortem.h"
+#ifdef CCONFOG_DEBUG_FS
 #include "adreno_debugfs.h"
+#endif
 #include "kgsl_cffdump.h"
 #include "kgsl_pwrctrl.h"
 

@@ -22,7 +22,9 @@
 #include "adreno.h"
 #include "adreno_pm4types.h"
 #include "adreno_ringbuffer.h"
+#ifdef CONFIG_DEBUG_FS
 #include "adreno_debugfs.h"
+#endif
 #include "adreno_postmortem.h"
 
 #include "a2xx_reg.h"
@@ -123,6 +125,7 @@ adreno_ringbuffer_waitspace(struct adreno_ringbuffer *rb, unsigned int numcmds,
 	}
 }
 
+#ifdef CONFIG_DEBUG_FS
 static unsigned int find_faulting_ib1_size(struct adreno_ringbuffer *rb,
 				unsigned int rptr, unsigned int ib1)
 {
@@ -152,6 +155,7 @@ static unsigned int find_faulting_ib1_size(struct adreno_ringbuffer *rb,
 
 	return 0;
 }
+#endif
 
 static unsigned int *adreno_ringbuffer_allocspace(struct adreno_ringbuffer *rb,
 					     unsigned int numcmds)
@@ -1236,7 +1240,7 @@ adreno_ringbuffer_restore(struct adreno_ringbuffer *rb, unsigned int *rb_buff,
 	rb->wptr += num_rb_contents;
 	adreno_ringbuffer_submit(rb);
 }
-
+#ifdef CONFIG_DEBUG_FS
 void adreno_print_fault_ib_work(struct work_struct *work)
 {
 	struct kgsl_device *device = container_of(work, struct kgsl_device,
@@ -1285,3 +1289,5 @@ void adreno_print_fault_ib(struct kgsl_device *device)
 done:
 	device->page_fault_ptbase = 0;
 }
+#endif
+
