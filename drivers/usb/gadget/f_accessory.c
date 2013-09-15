@@ -1208,13 +1208,13 @@ err:
 	pr_err("USB accessory gadget driver failed to initialize\n");
 	return ret;
 }
-
+#if 0
 static void acc_disconnect(void)
 {
 	/* unregister all HID devices if USB is disconnected */
 	kill_all_hid_devices(_acc_dev);
 }
-
+#endif
 static void acc_cleanup(void)
 {
 	misc_deregister(&acc_device);

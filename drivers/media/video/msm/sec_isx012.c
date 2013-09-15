@@ -779,7 +779,7 @@ void isx012_get_LowLightCondition_Normal(void)
 static int isx012_get_LowLightCondition(void)
 {
 	int err = -1;
-	unsigned char r_data2[2] = {0, 0};
+//	unsigned char r_data2[2] = {0, 0};
 	unsigned char l_data[2] = {0, 0}, h_data[2] = {0, 0};
 	unsigned int LowLight_value = 0;
 	unsigned int ldata_temp = 0, hdata_temp = 0;
@@ -1344,7 +1344,7 @@ static int isx012_set_flash(int8_t value1, int8_t value2)
 {
 	int err = -EINVAL;
 	int i = 0;
-	int torch = 0, torch2 = 0, torch3 = 0;
+//	int torch = 0, torch2 = 0, torch3 = 0;
 
 	/* Accessary concept */
 	if (accessibility_torch) {
@@ -2234,7 +2234,8 @@ static long isx012_set_sensor_mode(int mode)
 	int err = -EINVAL;
 	short unsigned int r_data[1] = {0};
 /*	short unsigned int r_data2[2] = {0, 0};*/
-	char modesel_fix[1] = {0}, awbsts[1] = {0};
+//	char modesel_fix[1] = {0};
+	char awbsts[1] = {0};
 	int timeout_cnt = 0;
 /*
 	unsigned int hunt1 = 0;
@@ -2511,7 +2512,7 @@ static ssize_t cameraflash_file_cmd_store(struct device *dev,
 	struct device_attribute *attr, const char *buf, size_t size)
 {
 	int value = 0, i = 0;
-	int torch = 0, torch2 = 0, torch3 = 0;
+//	int torch = 0, torch2 = 0, torch3 = 0;
 
 	sscanf(buf, "%d", &value);
 
@@ -2678,7 +2679,7 @@ static int isx012_sensor_init_probe(
 const struct msm_camera_sensor_info *data)
 {
 	int err = 0;
-	int temp = 0;
+//	int temp = 0;
 
 	CAM_DEBUG("[%s:%d] MCLK 24MHz Enable\n", __func__, __LINE__);
 

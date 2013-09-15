@@ -117,7 +117,7 @@ static int smb328a_read_reg(struct i2c_client *client, int reg)
 
 	return ret;
 }
-
+#if 0
 static void smb328a_print_reg(struct i2c_client *client, int reg)
 {
 	int data = 0;
@@ -158,7 +158,7 @@ static void smb328a_print_all_regs(struct i2c_client *client)
 
 	printk(KERN_ERR "[SMB328a][%s] ----- END -----\n", __func__);
 }
-
+#endif
 static void smb328a_allow_volatile_writes(struct i2c_client *client)
 {
 	int val;

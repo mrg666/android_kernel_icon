@@ -69,6 +69,7 @@ static void check_using_max17048(void)
 	is_max17048 = 0;
 #endif
 }
+/*
 static int fg_i2c_read(struct i2c_client *client, u8 reg, u8 * data)
 {
 	int ret;
@@ -89,7 +90,7 @@ static int fg_i2c_read(struct i2c_client *client, u8 reg, u8 * data)
 	*data = buf[0];
 	return 0;
 }
-
+*/
 static int fg_i2c_write(struct i2c_client *client, u8 reg, u8 * data)
 {
 	int ret;

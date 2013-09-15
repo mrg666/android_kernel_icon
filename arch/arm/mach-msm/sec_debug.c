@@ -126,8 +126,10 @@ static unsigned enable_user = 1;
 static char sec_build_info[100];
 static unsigned int secdbg_paddr;
 static unsigned int secdbg_size;
+#ifdef CONFIG_SEC_DEBUG_SUBSYS
 static unsigned int sec_subsys_paddr;
 static unsigned int sec_subsys_size;
+#endif
 
 module_param_named(enable, enable, uint, 0644);
 

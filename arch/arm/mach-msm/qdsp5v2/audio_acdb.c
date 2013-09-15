@@ -2262,7 +2262,7 @@ struct acdb_fluence_block *get_audpp_fluence_block(void)
 	}
 	return NULL;
 }
-
+#if 0
 static s32 acdb_fill_audpreproc_fluence(void)
 {
 	struct acdb_fluence_block *fluence_block = NULL;
@@ -2289,7 +2289,7 @@ static s32 acdb_fill_audpreproc_fluence(void)
 					& 0xFFFF0000) >> 16);
 	return 0;
 }
-
+#endif
 s32 acdb_calibrate_audpreproc(void)
 {
 	s32	result = 0;

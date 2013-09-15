@@ -219,7 +219,7 @@ struct ftk_ts_info {
 	int irq;
 	int (*power) (int on);
 
-#if TOUCH_BOOSTER
+#ifdef CONFIG_SEC_DVFS
 	struct delayed_work work_dvfs_off;
 	struct delayed_work work_dvfs_chg;
 	bool	dvfs_lock_status;
@@ -247,7 +247,7 @@ struct ftk_ts_info {
 #endif
 };
 
-#if TOUCH_BOOSTER
+#ifdef CONFIG_SEC_DVFS
 static void change_dvfs_lock(struct work_struct *work)
 {
 	struct ftk_ts_info *info = container_of(work,
@@ -774,10 +774,10 @@ static u8 firmware_load(struct ftk_ts_info *info, unsigned char *name)
 	firmware_release(firmware);
 
 	touch_is_pressed = 0;
-	#if TOUCH_BOOSTER
+#ifdef CONFIG_SEC_DVFS
 	set_dvfs_lock(info, 2);
 	pr_info("[TSP] dvfs_lock free.\n ");
-	#endif
+#endif
 
 	return rc;
 }
@@ -1018,9 +1018,9 @@ static u8 decode_data_packet_type_b(struct ftk_ts_info *info,
 
 	input_sync(info->input_dev);
 
-	#if TOUCH_BOOSTER
+#ifdef CONFIG_SEC_DVFS
 	set_dvfs_lock(info, !!touch_is_pressed);
-	#endif
+#endif
 
 	return LastLeftEvent;
 }
@@ -1464,12 +1464,12 @@ static int stm_ts_probe(struct i2c_client *client,
 		goto fail;
 	}
 
-	#if TOUCH_BOOSTER
+#ifdef CONFIG_SEC_DVFS
 	mutex_init(&info->dvfs_lock);
 	INIT_DELAYED_WORK(&info->work_dvfs_off, set_dvfs_off);
 	INIT_DELAYED_WORK(&info->work_dvfs_chg, change_dvfs_lock);
 	info->dvfs_lock_status = false;
-	#endif
+#endif
 
 	for (i = 0; i < FINGER_MAX; i++)
 		ID_Indx[i] = 0;
@@ -1609,10 +1609,10 @@ static int stm_ts_suspend(struct i2c_client *client, pm_message_t mesg)
 		ID_Indx[i] = 0;
 	touch_is_pressed = 0;
 
-	#if TOUCH_BOOSTER
+#ifdef CONFIG_SEC_DVFS
 	set_dvfs_lock(info, 2);
 	pr_info("[TSP] dvfs_lock free.\n ");
-	#endif
+#endif
 
 #ifdef CONFIG_MULTI_TOUCH_PROTOCOL_TYPE_B
 	for (i = 0; i < FINGER_MAX; i++) {

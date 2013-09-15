@@ -282,4 +282,4 @@ extern struct platform_device msm_device_csic1;
 extern struct platform_device msm_device_vfe;
 extern struct platform_device msm_device_vpe;
 
-extern int brcm_wlan_init();
+extern int brcm_wlan_init(void);

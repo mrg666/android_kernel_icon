@@ -54,7 +54,7 @@ static struct yda173_i2c_data g_data;
 static struct i2c_client *pclient;
 static struct snd_set_ampgain g_ampgain[MODE_NUM_MAX];
 static struct snd_set_ampgain temp;
-static int cur_mode;
+//static int cur_mode;
 
 static int load_ampgain(void)
 {

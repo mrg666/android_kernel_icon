@@ -925,7 +925,7 @@ static struct power_supply msm_psy_batt = {
 	.get_property = msm_batt_power_get_property,
 };
 
-static struct hrtimer LedTimer;
+//static struct hrtimer LedTimer;
 
 #define CHECK_DSG_INTERVAL	(30 * 1000)
 #define CHECK_CHG_INTERVAL	(30 * 1000)
@@ -2084,9 +2084,9 @@ static int msm_batt_average_temperature(int temp_adc)
 #define LED_ON			6
 #define LED_OFF			0
 
-static int led_toggle = 1;
-static int new_led_status;
-static int pre_led_status;
+//static int led_toggle = 1;
+//static int new_led_status;
+//static int pre_led_status;
 
 #ifndef BATT_LED_CONTROL_DISABLE
 static void msm_batt_led_control(void)
@@ -2163,7 +2163,7 @@ static void msm_batt_led_control(void)
 	}
 }
 #endif
-
+#ifndef BATT_LED_CONTROL_DISABLE
 static enum hrtimer_restart led_timer_func(struct hrtimer *timer)
 {
 	if (led_toggle) {
@@ -2179,7 +2179,7 @@ static enum hrtimer_restart led_timer_func(struct hrtimer *timer)
 
 	return HRTIMER_NORESTART;
 }
-
+#endif
 #endif
 
 int get_voice_call_status(void)
@@ -3424,6 +3424,8 @@ int msm_batt_is_ovp(int enable)
 	power_supply_changed(&msm_psy_ac);*/
 
 	wake_lock_timeout(&vbus_wake_lock, (1 * HZ));
+	
+	return 0;
 }
 EXPORT_SYMBOL(msm_batt_is_ovp);
 

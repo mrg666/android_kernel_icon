@@ -736,7 +736,7 @@ static int sr130pc10_set_power(int enable)
 static int cam_hw_init()
 {
 	int rc = 0;
-	struct vreg *vreg_L8;
+//	struct vreg *vreg_L8;
 
 #ifdef CONFIG_MACH_ICON
 	msm_camio_clk_rate_set(24000000);	/*MCLK*/

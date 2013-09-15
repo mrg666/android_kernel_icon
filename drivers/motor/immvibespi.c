@@ -82,7 +82,7 @@ static int32_t vibe_set_pwm_freq(int percent)
 	return VIBE_S_SUCCESS;
 }
 
-
+#if 0
 static int32_t vibe_pwm_onoff(u8 onoff)
 {
 	if (onoff) {
@@ -102,7 +102,7 @@ static int32_t vibe_pwm_onoff(u8 onoff)
 	}
 	return VIBE_S_SUCCESS;
 }
-
+#endif
 
 /*
 ** Called to disable amp (disable output force)

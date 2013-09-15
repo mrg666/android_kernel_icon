@@ -133,7 +133,7 @@ struct spi_cmd_desc {
 
 static char sleep_out_seq[1] = { 0x11 };
 static char disp_on_seq[1] = { 0x29 };
-static char disp_off_seq[1] = { 0x28 };
+// static char disp_off_seq[1] = { 0x28 };
 static char sleep_in_seq[1] = { 0x10 };
 /*static char sw_reset_seq[1] = { 0x01 };*/
 
@@ -316,13 +316,12 @@ static char set_cabc_off[2] = {
 	0xB8,
 	0x00
 };
-
+#if 0
 static char set_cabc_off1[8] = {
 	0xB9,
 	0x18, 0x00, 0x18, 0x18, 0x00,
 	0x00
 };
-
 
 static char set_cabc_off2[23] = {
 	0xBA,
@@ -359,6 +358,7 @@ static char set_cabc_off5[23] = {
 	0xFF, 0x10, 0xDF, 0xE7, 0xEF,
 	0xF7, 0xFF
 };
+#endif
 static struct spi_cmd_desc display_on_cmds[] = {
 	{sizeof(sleep_out_seq), sleep_out_seq, 40},
 

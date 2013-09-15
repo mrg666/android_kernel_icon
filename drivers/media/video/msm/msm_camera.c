@@ -59,6 +59,7 @@ static uint32_t sensor_mount_angle[MSM_MAX_CAMERA_SENSORS];
 
 struct ion_client *client_for_ion;
 
+#ifdef CONFIG_MSM_CAMERA_DEBUG
 static const char *vfe_config_cmd[] = {
 	"CMD_GENERAL",  /* 0 */
 	"CMD_AXI_CFG_OUT1",
@@ -106,6 +107,7 @@ static const char *vfe_config_cmd[] = {
 	"CMD_AXI_CFG_SNAP_VPE",
 	"CMD_AXI_CFG_SNAP_THUMB_VPE",
 };
+#endif
 #define __CONTAINS(r, v, l, field) ({				\
 	typeof(r) __r = r;					\
 	typeof(v) __v = v;					\
@@ -576,7 +578,7 @@ static unsigned long msm_pmem_frame_vtop_lookup(struct msm_sync *sync,
 	pr_err("%s, failed for vaddr 0x%lx, p0_off %d p1_off %d\n",
 			__func__, buffer, p0_off, p1_off);
 	hlist_for_each_entry_safe(region, node, n, &sync->pmem_frames, list) {
-		pr_err("%s, listed vaddr 0x%lx, r_p0 = 0x%x p0_off 0x%x"
+		pr_err("%s, listed vaddr 0x%p, r_p0 = 0x%x p0_off 0x%x"
 			"r_p1 = 0x%x, p1_off 0x%x, r_p2 = 0x%x, p2_off = 0x%x"
 			" r_fd = %d , fd=%d,"
 			" active = %d, change_flag=%d\n", __func__, region->info.vaddr,
