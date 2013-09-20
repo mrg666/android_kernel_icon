@@ -9,8 +9,8 @@
  *
  */
 
-#define SEC_TOUCHKEY_DEBUG
-/* #define SEC_TOUCHKEY_VERBOSE_DEBUG */
+/* #define SEC_TOUCHKEY_DEBUG
+#define SEC_TOUCHKEY_VERBOSE_DEBUG */
 
 #include <linux/module.h>
 #include <linux/input.h>

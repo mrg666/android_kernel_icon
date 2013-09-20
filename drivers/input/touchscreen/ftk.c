@@ -981,9 +981,8 @@ static u8 decode_data_packet_type_b(struct ftk_ts_info *info,
 			TouchID, x, y, z);
 			break;
 #else
-		if (EventID == 0x03)
-			printk(KERN_ERR "FTK ID[%d] down\n",
-			TouchID);
+		//if (EventID == 0x03)
+		//	printk(KERN_ERR "FTK ID[%d] down\n", TouchID);
 			break;
 #endif
 
@@ -992,8 +991,7 @@ static u8 decode_data_packet_type_b(struct ftk_ts_info *info,
 			input_mt_slot(info->input_dev, TouchID);
 			input_report_abs(
 				info->input_dev, ABS_MT_TRACKING_ID, -1);
-			printk(KERN_ERR "FTK ID[%d] up\n",
-			TouchID);
+			// printk(KERN_ERR "FTK ID[%d] up\n", TouchID);
 			break;
 
 		case EVENTID_CONTROLLER_READY:

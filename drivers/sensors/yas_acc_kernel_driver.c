@@ -1353,8 +1353,8 @@ static void yas_acc_work_func(struct work_struct *work)
 #endif
 
 	if (data->log_cnt == 50) {
-		pr_err("%s: %d, %d, %d\n", __func__, accel.xyz.v[0],
-			accel.xyz.v[1], accel.xyz.v[2]);
+		/* pr_err("%s: %d, %d, %d\n", __func__, accel.xyz.v[0],
+			accel.xyz.v[1], accel.xyz.v[2]); */
 		data->log_cnt = 0;
 	}
 	data->log_cnt = data->log_cnt + 1;
